@@ -1,5 +1,7 @@
-import type { Point, Quad, Rotation } from '../../image'
+import type { Point, Quad } from '../../image'
 import { isValidCrop, pointInImage } from '../../pages/scan/geometry'
+
+export { orientCorners } from '../../pages/scan/geometry'
 
 function furthestValidCrop(corners: Quad, position: (ratio: number) => Quad): Quad {
   const target = position(1)
@@ -74,18 +76,6 @@ export function magnifierPosition(touch: Point, viewport: Point, size: number): 
     x: Math.max(VIEWPORT_MARGIN, Math.min(viewport.x - size - VIEWPORT_MARGIN, touch.x - size / 2)),
     y: Math.max(VIEWPORT_MARGIN, Math.min(viewport.y - size - VIEWPORT_MARGIN, preferredY)),
   }
-}
-
-export function orientCorners([a, b, c, d]: Quad, rotation: Rotation): Quad {
-  function orient({ x, y }: Point): Point {
-    switch (rotation) {
-      case 90: return { x: 1 - y, y: x }
-      case 180: return { x: 1 - x, y: 1 - y }
-      case 270: return { x: y, y: 1 - x }
-      default: return { x, y }
-    }
-  }
-  return [orient(a), orient(b), orient(c), orient(d)]
 }
 
 export interface CropView {

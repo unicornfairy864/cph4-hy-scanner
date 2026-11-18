@@ -4,13 +4,15 @@ import { cloudEnabled, runCloudEnhancement } from '../../services/cloud'
 import type { CloudOperation } from '../../services/cloud'
 import { exportQualities } from '../export/session'
 import type { ExportPage, PdfSession } from '../export/session'
-import { edgeStyles, fitImage, fullImageCorners, isValidCrop } from './geometry'
+import { edgeStyles, fitImage, fullImageCorners, isValidCrop, orientCorners } from './geometry'
 
 const MAX_PAGES = 30
-const TILE_STRIDE = 138
-const TILE_WIDTH = 112
-const TILE_HEIGHT = 126
-const COLLAPSE_DISTANCE = 100
+const TILE_CARD_WIDTH = 158
+const TILE_CARD_HEIGHT = 228
+const TILE_STRIDE = TILE_CARD_WIDTH + 15
+const TILE_PHOTO_WIDTH = 140
+const TILE_PHOTO_HEIGHT = 158
+const DRAG_HOLD_MS = 300
 const modes: Array<{ value: ImageMode; label: string }> = [
   { value: 'color', label: '原色' },
   { value: 'grayscale', label: '灰度' },
@@ -47,6 +49,9 @@ interface PagePress {
   from: number
   x: number
   y: number
+  scroll: number
+  currentX: number
+  currentY: number
 }
 
 interface PageDrag {
@@ -67,6 +72,7 @@ interface Thumbnail {
   source: string
   width: number
   height: number
+  photoStyle: string
   lines: Array<{ id: number; style: string }>
 }
 
@@ -88,7 +94,6 @@ interface ScannerData {
   source: string
   previewLayers: PreviewLayer[]
   previewHeight: number
-  controlsMinHeight: number
   showOriginal: boolean
   hasEnhanced: boolean
   autoDetected: boolean
@@ -125,10 +130,9 @@ interface ScannerActions {
   selectedPage: number
   generatedImages: Set<string>
   rpx: number
-  expandedHeight: number
-  collapsedHeight: number
   actualThumbScroll: number
   pagePress?: PagePress
+  pagePressTimer?: ReturnType<typeof setTimeout>
   pageDrag?: PageDrag
   suppressTapUntil: number
   closed: boolean
@@ -149,14 +153,13 @@ interface ScannerActions {
   selectPage(event: WechatMiniprogram.TouchEvent): void
   activatePage(index: number, scrollToPage?: boolean): void
   changePage(event: WechatMiniprogram.TouchEvent): void
-  onControlsScroll(event: { detail: { scrollTop: number } }): void
   onThumbnailsScroll(event: { detail: { scrollLeft: number } }): void
   rememberPageTouch(event: WechatMiniprogram.TouchEvent): void
-  startPageDrag(event: WechatMiniprogram.TouchEvent): void
+  startPageDrag(press: PagePress): void
   updatePageDrag(): void
   movePageDrag(event: WechatMiniprogram.TouchEvent): void
   endPageDrag(event: WechatMiniprogram.TouchEvent): void
-  cancelPageDrag(): void
+  cancelPageDrag(event?: WechatMiniprogram.TouchEvent): void
   stopPageDrag(): void
   relocatePage(from: number, to: number): void
   moveSelectedPage(event: WechatMiniprogram.TouchEvent): void
@@ -244,7 +247,7 @@ function renderOptions(page: ScanPage): Omit<ExportPage, 'enhanced' | 'preview'>
 
 Page<ScannerData, ScannerActions>({
   data: {
-    pages: [], pageCount: 0, selected: 0, source: '', previewLayers: [], previewHeight: 300, controlsMinHeight: 480,
+    pages: [], pageCount: 0, selected: 0, source: '', previewLayers: [], previewHeight: 0,
     showOriginal: false, hasEnhanced: false, autoDetected: false, partialDetected: false,
     cornerConfidences: [0, 0, 0, 0], mode: 'color', enhance: true, denoise: true, dewarp: false,
     cropOpen: false, cropWidth: 0, cropHeight: 0, cropRotation: 0, corners: fullImageCorners, modes,
@@ -258,8 +261,6 @@ Page<ScannerData, ScannerActions>({
   selectedPage: 0,
   generatedImages: new Set(),
   rpx: 0.5,
-  expandedHeight: 300,
-  collapsedHeight: 200,
   actualThumbScroll: 0,
   suppressTapUntil: 0,
   closed: false,
@@ -270,12 +271,7 @@ Page<ScannerData, ScannerActions>({
     this.generatedImages = new Set()
     const window = wx.getWindowInfo ? wx.getWindowInfo() : wx.getSystemInfoSync()
     this.rpx = window.windowWidth / 750
-    this.expandedHeight = Math.round(window.windowHeight * 0.53)
-    this.collapsedHeight = Math.round(window.windowHeight * 0.35)
-    this.setData({
-      previewHeight: this.expandedHeight,
-      controlsMinHeight: window.windowHeight - this.collapsedHeight + COLLAPSE_DISTANCE,
-    })
+    this.setData({ previewHeight: Math.round(window.windowHeight * 0.4) })
   },
 
   takePhoto() {
@@ -357,12 +353,16 @@ Page<ScannerData, ScannerActions>({
   syncGallery() {
     if (this.closed) return
     const pages: Thumbnail[] = this.scans.map((page) => {
-      const scale = Math.min(TILE_WIDTH * this.rpx / page.width, TILE_HEIGHT * this.rpx / page.height)
-      const width = page.width * scale
-      const height = page.height * scale
+      const swapSides = page.rotation === 90 || page.rotation === 270
+      const imageWidth = swapSides ? page.height : page.width
+      const imageHeight = swapSides ? page.width : page.height
+      const scale = Math.min(TILE_PHOTO_WIDTH * this.rpx / imageWidth, TILE_PHOTO_HEIGHT * this.rpx / imageHeight)
+      const width = imageWidth * scale
+      const height = imageHeight * scale
       return {
         id: page.id, source: page.source, width, height,
-        lines: edgeStyles(page.corners, width, height).map((style, id) => ({ id, style })),
+        photoStyle: `width:${page.width * scale}px;height:${page.height * scale}px;transform:translate(-50%,-50%) rotate(${page.rotation}deg)`,
+        lines: edgeStyles(orientCorners(page.corners, page.rotation), width, height).map((style, id) => ({ id, style })),
       }
     })
     this.setData({ pages, pageCount: pages.length })
@@ -495,13 +495,6 @@ Page<ScannerData, ScannerActions>({
     if (direction === -1 || direction === 1) this.activatePage(this.selectedPage + direction, true)
   },
 
-  onControlsScroll(event) {
-    const offset = Math.max(0, Math.min(COLLAPSE_DISTANCE, event.detail.scrollTop))
-    const progress = Math.round(offset / 4) * 4 / COLLAPSE_DISTANCE
-    const previewHeight = Math.round(this.expandedHeight + (this.collapsedHeight - this.expandedHeight) * progress)
-    if (this.data.previewHeight !== previewHeight) this.setData({ previewHeight })
-  },
-
   openCrop() {
     const page = this.current()
     if (!page || this.data.busy) return
@@ -534,10 +527,10 @@ Page<ScannerData, ScannerActions>({
       page.corners = copyCorners(corners)
       page.cornerConfidences = [1, 1, 1, 1]
       page.autoDetected = true
-      this.syncGallery()
     }
     if (cropChanged || rotationChanged) {
       page.rotation = rotation
+      this.syncGallery()
       this.invalidate(page)
     } else {
       this.paint()
@@ -549,6 +542,7 @@ Page<ScannerData, ScannerActions>({
     const page = this.current()
     if (!page || this.data.busy || this.pageDrag) return
     page.rotation = ((page.rotation + 90) % 360) as Rotation
+    this.syncGallery()
     this.invalidate(page)
   },
 
@@ -621,32 +615,43 @@ Page<ScannerData, ScannerActions>({
   },
 
   onThumbnailsScroll(event) {
+    if (this.pagePress && !this.pageDrag && Math.abs(this.pagePress.scroll - event.detail.scrollLeft) > 4) {
+      this.stopPageDrag()
+    }
     this.actualThumbScroll = event.detail.scrollLeft
     this.updatePageDrag()
   },
 
   rememberPageTouch(event) {
     if (this.pageDrag) return
-    this.pagePress = undefined
+    this.stopPageDrag()
     this.suppressTapUntil = 0
-    if (event.target?.dataset?.deleteControl || this.data.busy || this.scans.length < 2) return
+    if (event.target?.dataset?.deleteControl || event.touches.length !== 1 || this.data.busy || this.scans.length < 2) return
     const touch = event.changedTouches[0]
     const from = Number(event.currentTarget.dataset.index)
     const page = this.scans[from]
-    if (touch && page) this.pagePress = { id: page.id, from, touchId: touch.identifier, x: touch.clientX, y: touch.clientY }
+    if (!touch || !page) return
+    const press: PagePress = {
+      id: page.id, from, touchId: touch.identifier, x: touch.clientX, y: touch.clientY,
+      scroll: this.actualThumbScroll, currentX: touch.clientX, currentY: touch.clientY,
+    }
+    this.pagePress = press
+    this.pagePressTimer = setTimeout(() => {
+      this.pagePressTimer = undefined
+      if (this.pagePress === press) this.startPageDrag(press)
+    }, DRAG_HOLD_MS)
   },
 
-  startPageDrag(event) {
-    const press = this.pagePress
-    const from = Number(event.currentTarget.dataset.index)
+  startPageDrag(press) {
+    const { from, currentX: x, currentY: y } = press
     const tile = this.data.pages[from]
-    if (!press || !tile || press.id !== tile.id || this.pageDrag || this.data.busy) return
-    const touch = event.touches?.find((point) => point.identifier === press.touchId) ?? press
-    const x = 'clientX' in touch ? touch.clientX : touch.x
-    const y = 'clientY' in touch ? touch.clientY : touch.y
+    if (!tile || press.id !== tile.id || this.pageDrag || this.closed || this.data.busy || this.data.cropOpen) {
+      this.stopPageDrag()
+      return
+    }
     const drag: PageDrag = {
       press, startScroll: this.actualThumbScroll, scroll: this.actualThumbScroll,
-      x, y, gripX: 63 * this.rpx, gripY: 91 * this.rpx, target: from,
+      x, y, gripX: TILE_CARD_WIDTH * this.rpx / 2, gripY: TILE_CARD_HEIGHT * this.rpx / 2, target: from,
     }
     this.pageDrag = drag
     this.setData({
@@ -695,10 +700,18 @@ Page<ScannerData, ScannerActions>({
 
   movePageDrag(event) {
     const press = this.pagePress
+    if (press && !this.pageDrag && event.touches.length !== 1) {
+      this.stopPageDrag()
+      return
+    }
     const touch = press && event.touches.find((point) => point.identifier === press.touchId)
     if (!press || !touch) return
     if (!this.pageDrag) {
-      if (Math.hypot(touch.clientX - press.x, touch.clientY - press.y) > 10) this.pagePress = undefined
+      if (Math.hypot(touch.clientX - press.x, touch.clientY - press.y) > 10) this.stopPageDrag()
+      else {
+        press.currentX = touch.clientX
+        press.currentY = touch.clientY
+      }
       return
     }
     this.pageDrag.x = touch.clientX
@@ -721,13 +734,18 @@ Page<ScannerData, ScannerActions>({
     if (drag && drag.target !== press.from) this.relocatePage(press.from, drag.target)
   },
 
-  cancelPageDrag() {
+  cancelPageDrag(event) {
+    const press = this.pagePress
+    const cancelled = event?.changedTouches
+    if (press && cancelled?.length && !cancelled.some((touch) => touch.identifier === press.touchId)) return
     this.stopPageDrag()
   },
 
   stopPageDrag() {
     const drag = this.pageDrag
     this.pagePress = undefined
+    if (this.pagePressTimer !== undefined) clearTimeout(this.pagePressTimer)
+    this.pagePressTimer = undefined
     if (!drag) return
     this.pageDrag = undefined
     this.suppressTapUntil = Date.now() + 300
@@ -771,7 +789,6 @@ Page<ScannerData, ScannerActions>({
     this.selectedPage = Math.max(0, Math.min(this.selectedPage, this.scans.length - 1))
     this.setData({
       candidate: '', deleteArmed: -1, thumbAnchor: this.scans.length ? `scan-page-${this.current()?.id}` : '',
-      ...(this.scans.length ? {} : { previewHeight: this.expandedHeight }),
     })
     this.syncGallery()
     this.syncSelection(true)
