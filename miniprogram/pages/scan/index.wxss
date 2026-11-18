@@ -188,26 +188,31 @@ button.image-arrow[disabled] { opacity: 0.3; }
 .drag-handle { color: #466c61; font-size: 32rpx; line-height: 42rpx; margin-left: 10rpx; min-width: 42rpx; touch-action: none; }
 
 button.page-delete {
-  background: #892e27;
-  border-radius: 20rpx;
-  color: #fff;
-  font-size: 24rpx;
-  height: 40rpx;
-  line-height: 40rpx;
-  min-height: 40rpx;
-  min-width: 40rpx;
-  padding: 0 7rpx;
+  align-items: flex-start;
+  background: transparent;
+  color: #a43730;
+  display: flex;
+  height: 52rpx;
+  justify-content: flex-end;
+  min-height: 52rpx;
+  min-width: 52rpx;
+  padding: 4rpx;
   position: absolute;
   right: -2rpx;
   top: -4rpx;
   z-index: 2;
 }
 
-button.page-delete-armed { background: #a7382e; padding: 0 11rpx; }
-.organizer-actions { margin-top: 8rpx; }
-button.organizer-button { align-items: center; display: flex; gap: 10rpx; justify-content: center; }
+.delete-label { background: #fffc; border-radius: 16rpx; font-size: 25rpx; height: 28rpx; line-height: 28rpx; min-width: 28rpx; }
+.page-delete-armed > .delete-label { background: #fbeae7; font-size: 21rpx; padding: 0 8rpx; }
+.organizer-actions { margin-bottom: 14rpx; }
+button.organizer-button { align-items: center; display: flex; gap: 6rpx; justify-content: center; min-width: 0; padding: 18rpx 4rpx; white-space: nowrap; }
+button.organizer-button.secondary { background: #e2ebe3; }
 .organizer-symbol { font-size: 30rpx; line-height: 1; }
-.organizer-edits { margin-top: 14rpx; }
+.crop-symbol { box-sizing: border-box; height: 27rpx; position: relative; width: 27rpx; }
+.crop-symbol::before, .crop-symbol::after { border-color: currentColor; border-style: solid; content: ''; height: 18rpx; position: absolute; width: 18rpx; }
+.crop-symbol::before { border-width: 0 0 2rpx 2rpx; bottom: 4rpx; left: 4rpx; }
+.crop-symbol::after { border-width: 2rpx 2rpx 0 0; right: 4rpx; top: 4rpx; }
 .options { margin: 16rpx 0; }
 .active-cloud { margin-top: 8rpx; }
 .setting { display: flex; align-items: center; justify-content: space-between; font-size: 28rpx; min-height: 76rpx; }

@@ -1,6 +1,6 @@
 <view class="scanner">
   <scroll-view wx:if="{{cropOpen}}" class="crop-host" scroll-y>
-    <crop-editor source="{{source}}" corners="{{corners}}" width="{{cropWidth}}" height="{{cropHeight}}"
+    <crop-editor source="{{source}}" corners="{{corners}}" rotation="{{cropRotation}}" width="{{cropWidth}}" height="{{cropHeight}}"
       auto-detected="{{autoDetected}}" partial-detected="{{partialDetected}}" corner-confidences="{{cornerConfidences}}"
       bindcancel="closeCrop" bindapply="applyCrop" />
   </scroll-view>
@@ -41,6 +41,12 @@
 
     <scroll-view class="controls-scroll" scroll-y enhanced show-scrollbar="{{false}}" bindscroll="onControlsScroll">
       <view class="controls-content" style="min-height:{{controlsMinHeight}}px">
+        <view class="button-row organizer-actions">
+          <button class="secondary organizer-button" data-direction="-1" bindtap="moveSelectedPage" disabled="{{!!busy || selected === 0 || dragId >= 0}}"><text class="organizer-symbol" aria-hidden="true">←</text><text>左移</text></button>
+          <button class="secondary organizer-button" data-direction="1" bindtap="moveSelectedPage" disabled="{{!!busy || selected === pageCount - 1 || dragId >= 0}}"><text class="organizer-symbol" aria-hidden="true">→</text><text>右移</text></button>
+          <button class="secondary organizer-button" bindtap="openCrop" disabled="{{!!busy || dragId >= 0}}"><view class="crop-symbol" aria-hidden="true" /><text>裁切</text></button>
+          <button class="primary organizer-button" bindtap="showImportOptions" disabled="{{!!busy || dragId >= 0}}"><text class="organizer-symbol" aria-hidden="true">＋</text><text>新增</text></button>
+        </view>
         <view class="panel organizer">
           <view class="panel-top">
             <view class="heading">整理页面</view>
@@ -60,7 +66,7 @@
                   </view>
                   <button wx:if="{{selected === index}}" class="page-delete {{deleteArmed === item.id ? 'page-delete-armed' : ''}}"
                     data-id="{{item.id}}" catchtap="removePage" disabled="{{!!busy || dragId >= 0}}"
-                    aria-label="{{deleteArmed === item.id ? '确认删除当前页' : '删除当前页'}}">{{deleteArmed === item.id ? '删除' : '×'}}</button>
+                    aria-label="{{deleteArmed === item.id ? '确认删除当前页' : '删除当前页'}}"><text class="delete-label">{{deleteArmed === item.id ? '删除' : '×'}}</text></button>
                   <view class="thumbnail-foot">
                     <text class="thumbnail-number">{{index + 1}}</text>
                     <view wx:if="{{pageCount > 1}}" class="drag-handle" data-index="{{index}}" catchtouchstart="startPageDrag"
@@ -69,15 +75,6 @@
                 </view>
               </view>
             </scroll-view>
-          </view>
-          <view class="button-row organizer-actions">
-            <button class="secondary organizer-button" data-direction="-1" bindtap="moveSelectedPage" disabled="{{!!busy || selected === 0 || dragId >= 0}}"><text class="organizer-symbol" aria-hidden="true">←</text><text>左移</text></button>
-            <button class="secondary organizer-button" data-direction="1" bindtap="moveSelectedPage" disabled="{{!!busy || selected === pageCount - 1 || dragId >= 0}}"><text class="organizer-symbol" aria-hidden="true">→</text><text>右移</text></button>
-            <button class="primary organizer-button" bindtap="showImportOptions" disabled="{{!!busy || dragId >= 0}}"><text class="organizer-symbol" aria-hidden="true">＋</text><text>新增</text></button>
-          </view>
-          <view class="button-row organizer-edits">
-            <button class="secondary" bindtap="openCrop" disabled="{{!!busy}}">调整四角</button>
-            <button class="secondary" bindtap="rotate" disabled="{{!!busy}}">顺时针旋转</button>
           </view>
           <button wx:if="{{needsAlbumAccess}}" class="secondary full-width" open-type="openSetting"
             bindopensetting="refreshAlbumPermission" disabled="{{!!busy}}">开启相册保存权限</button>
