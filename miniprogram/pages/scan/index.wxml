@@ -39,38 +39,39 @@
       </view>
     </view>
 
-    <scroll-view class="controls-scroll" scroll-y enhanced show-scrollbar="{{false}}" bindscroll="onControlsScroll">
+    <scroll-view class="controls-scroll" scroll-y="{{dragId < 0}}" enhanced show-scrollbar="{{false}}" bindscroll="onControlsScroll">
       <view class="controls-content" style="min-height:{{controlsMinHeight}}px">
         <view class="button-row organizer-actions">
           <button class="secondary organizer-button" data-direction="-1" bindtap="moveSelectedPage" disabled="{{!!busy || selected === 0 || dragId >= 0}}"><text class="organizer-symbol" aria-hidden="true">←</text><text>左移</text></button>
           <button class="secondary organizer-button" data-direction="1" bindtap="moveSelectedPage" disabled="{{!!busy || selected === pageCount - 1 || dragId >= 0}}"><text class="organizer-symbol" aria-hidden="true">→</text><text>右移</text></button>
-          <button class="secondary organizer-button" bindtap="openCrop" disabled="{{!!busy || dragId >= 0}}"><view class="crop-symbol" aria-hidden="true" /><text>裁切</text></button>
-          <button class="primary organizer-button" bindtap="showImportOptions" disabled="{{!!busy || dragId >= 0}}"><text class="organizer-symbol" aria-hidden="true">＋</text><text>新增</text></button>
+          <button class="secondary organizer-button" bindtap="openCrop" disabled="{{!!busy || dragId >= 0}}"><text class="organizer-symbol" aria-hidden="true">✂</text><text>裁切</text></button>
+          <button class="secondary organizer-button" bindtap="rotate" disabled="{{!!busy || dragId >= 0}}" aria-label="顺时针旋转"><text class="organizer-symbol" aria-hidden="true">↻</text></button>
+          <button class="secondary organizer-button" bindtap="restoreCrop" disabled="{{!!busy || dragId >= 0}}" aria-label="还原完整裁切范围"><text>还原</text></button>
         </view>
         <view class="panel organizer">
           <view class="panel-top">
             <view class="heading">整理页面</view>
-            <view wx:if="{{pageCount > 1}}" class="support">拖动下方手柄排序</view>
+            <button class="organizer-add" bindtap="showImportOptions" disabled="{{!!busy || dragId >= 0}}" aria-label="新增图片"><text aria-hidden="true">＋</text></button>
           </view>
           <view class="thumbnail-row">
-            <scroll-view class="thumbnail-strip" scroll-x enhanced show-scrollbar="{{false}}" scroll-left="{{thumbScrollLeft}}"
+            <scroll-view class="thumbnail-strip" scroll-x="{{dragId < 0}}" enhanced show-scrollbar="{{false}}" scroll-left="{{thumbScrollLeft}}"
               scroll-into-view="{{thumbAnchor}}" bindscroll="onThumbnailsScroll" aria-label="扫描页列表">
-              <view class="thumbnail-track">
+              <view class="thumbnail-track" style="transform:translateX({{thumbTrackShift}}px)">
                 <view wx:for="{{pages}}" wx:key="id" id="scan-page-{{item.id}}" data-index="{{index}}"
-                  class="thumbnail {{selected === index ? 'thumbnail-selected' : ''}} {{dragId === item.id ? 'thumbnail-dragging' : ''}} {{dragTarget === index && dragId !== item.id ? 'thumbnail-target' : ''}}">
-                  <view class="thumbnail-tap" bindtap="selectPage" data-index="{{index}}" aria-role="button" aria-label="第 {{index + 1}} 页">
+                  class="thumbnail {{selected === index ? 'thumbnail-selected' : ''}} {{dragId === item.id ? 'thumbnail-dragging' : ''}} {{dragTarget === index && dragId !== item.id ? 'thumbnail-target' : ''}} {{dragFrom < index && index <= dragTarget && dragId >= 0 ? 'thumbnail-slide-left' : ''}} {{dragTarget <= index && index < dragFrom && dragId >= 0 ? 'thumbnail-slide-right' : ''}}"
+                  bindtap="selectPage" bindtouchstart="rememberPageTouch" bindlongpress="startPageDrag"
+                  bindtouchmove="movePageDrag" bindtouchend="endPageDrag" bindtouchcancel="cancelPageDrag">
+                  <view class="thumbnail-tap" aria-role="button" aria-label="第 {{index + 1}} 页">
                     <view class="thumbnail-photo" style="width:{{item.width}}px;height:{{item.height}}px">
                       <image src="{{item.source}}" mode="scaleToFill" lazy-load />
                       <view wx:for="{{item.lines}}" wx:for-item="line" wx:key="id" class="thumbnail-edge" style="{{line.style}}" />
                     </view>
                   </view>
                   <button wx:if="{{selected === index}}" class="page-delete {{deleteArmed === item.id ? 'page-delete-armed' : ''}}"
-                    data-id="{{item.id}}" catchtap="removePage" disabled="{{!!busy || dragId >= 0}}"
-                    aria-label="{{deleteArmed === item.id ? '确认删除当前页' : '删除当前页'}}"><text class="delete-label">{{deleteArmed === item.id ? '删除' : '×'}}</text></button>
+                    data-id="{{item.id}}" data-delete-control="true" catchtap="removePage" disabled="{{!!busy || dragId >= 0}}"
+                    aria-label="{{deleteArmed === item.id ? '确认删除当前页' : '删除当前页'}}"><text class="delete-label" data-delete-control="true">{{deleteArmed === item.id ? '删除' : '×'}}</text></button>
                   <view class="thumbnail-foot">
                     <text class="thumbnail-number">{{index + 1}}</text>
-                    <view wx:if="{{pageCount > 1}}" class="drag-handle" data-index="{{index}}" catchtouchstart="startPageDrag"
-                      catchtouchmove="movePageDrag" catchtouchend="endPageDrag" catchtouchcancel="cancelPageDrag" aria-label="拖动调整第 {{index + 1}} 页顺序">⠿</view>
                   </view>
                 </view>
               </view>
@@ -111,6 +112,17 @@
         </view>
       </view>
     </scroll-view>
+  </view>
+
+  <view wx:if="{{dragGhost}}" class="thumbnail thumbnail-ghost"
+    style="transform:translate3d({{dragGhost.left}}px,{{dragGhost.top}}px,0)" aria-hidden="true">
+    <view class="thumbnail-tap">
+      <view class="thumbnail-photo" style="width:{{dragGhost.width}}px;height:{{dragGhost.height}}px">
+        <image src="{{dragGhost.source}}" mode="scaleToFill" />
+        <view wx:for="{{dragGhost.lines}}" wx:key="id" class="thumbnail-edge" style="{{item.style}}" />
+      </view>
+    </view>
+    <view class="thumbnail-foot"><text class="thumbnail-number">{{dragGhost.number}}</text></view>
   </view>
 
   <view wx:if="{{busy}}" class="status" aria-role="status">

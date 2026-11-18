@@ -162,6 +162,7 @@ button.image-arrow[disabled] { opacity: 0.3; }
 .thumbnail-row { margin-top: 16rpx; }
 .thumbnail-strip { white-space: nowrap; width: 100%; }
 .thumbnail-track { display: inline-flex; padding: 8rpx 0; vertical-align: top; }
+button.organizer-add { background: #185e53; border-radius: 14rpx; color: #fff; flex: none; font-size: 36rpx; height: 58rpx; line-height: 58rpx; min-height: 58rpx; padding: 0; width: 60rpx; }
 
 .thumbnail {
   background: #eef4ef;
@@ -173,19 +174,32 @@ button.image-arrow[disabled] { opacity: 0.3; }
   margin-right: 12rpx;
   position: relative;
   text-align: center;
+  transition: transform 160ms ease-out, opacity 160ms ease-out;
   width: 126rpx;
 }
 
 .thumbnail-selected { border-color: #185e53; }
-.thumbnail-dragging { opacity: 0.45; }
+.thumbnail-dragging { opacity: 0.14; }
 .thumbnail-target { border-color: #268578; border-style: dashed; }
+.thumbnail-slide-left { transform: translateX(-40%); }
+.thumbnail-slide-right { transform: translateX(40%); }
+.thumbnail-ghost {
+  border-color: #268578;
+  box-shadow: 0 8rpx 22rpx #112b2860;
+  left: 0;
+  margin: 0;
+  pointer-events: none;
+  position: fixed;
+  top: 0;
+  transition: none;
+  z-index: 5;
+}
 .thumbnail-tap { align-items: center; display: flex; height: 136rpx; justify-content: center; }
 .thumbnail-photo { position: relative; }
 .thumbnail-photo > image { display: block; height: 100%; width: 100%; }
 .thumbnail-edge { background: #49d0ae; box-shadow: 0 0 1rpx #12473a; height: 2rpx; pointer-events: none; position: absolute; transform-origin: left center; }
 .thumbnail-foot { align-items: center; display: flex; height: 42rpx; justify-content: center; }
 .thumbnail-number { color: #29463e; font-size: 23rpx; }
-.drag-handle { color: #466c61; font-size: 32rpx; line-height: 42rpx; margin-left: 10rpx; min-width: 42rpx; touch-action: none; }
 
 button.page-delete {
   align-items: flex-start;
@@ -209,10 +223,6 @@ button.page-delete {
 button.organizer-button { align-items: center; display: flex; gap: 6rpx; justify-content: center; min-width: 0; padding: 18rpx 4rpx; white-space: nowrap; }
 button.organizer-button.secondary { background: #e2ebe3; }
 .organizer-symbol { font-size: 30rpx; line-height: 1; }
-.crop-symbol { box-sizing: border-box; height: 27rpx; position: relative; width: 27rpx; }
-.crop-symbol::before, .crop-symbol::after { border-color: currentColor; border-style: solid; content: ''; height: 18rpx; position: absolute; width: 18rpx; }
-.crop-symbol::before { border-width: 0 0 2rpx 2rpx; bottom: 4rpx; left: 4rpx; }
-.crop-symbol::after { border-width: 2rpx 2rpx 0 0; right: 4rpx; top: 4rpx; }
 .options { margin: 16rpx 0; }
 .active-cloud { margin-top: 8rpx; }
 .setting { display: flex; align-items: center; justify-content: space-between; font-size: 28rpx; min-height: 76rpx; }
