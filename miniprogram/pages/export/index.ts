@@ -40,7 +40,7 @@ Page<ExportData, ExportActions>({
   closed: false,
 
   onLoad() {
-    this.getOpenerEventChannel().on('scanExport', (session: PdfSession) => {
+    this.getOpenerEventChannel?.()?.on('scanExport', (session: PdfSession) => {
       if (this.closed) return
       this.session = session
       this.setData({ selected: session.selected, pageCount: session.pages.length })

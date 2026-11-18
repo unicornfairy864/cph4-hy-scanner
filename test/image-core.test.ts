@@ -55,7 +55,7 @@ test('finds a tilted document and declines an image with no edges', () => {
     near(detected.corners[i].y * 239, corners[i].y, 5);
   }
   assert.deepEqual(detectDocument(frame(50, 50, () => [129, 129, 129])), {
-    corners: null, confidence: 0,
+    corners: null, confidence: 0, cornerConfidences: [0, 0, 0, 0],
   });
 });
 

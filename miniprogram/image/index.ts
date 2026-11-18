@@ -6,7 +6,7 @@ import type {
 import { orientationTransform, resetJpegOrientation } from './orientation';
 import type { Transform } from './orientation';
 
-export type { ImageMode, ImageQuality, Point, Quad, Rotation } from '../workers/image/types';
+export type { CornerConfidences, ImageMode, ImageQuality, Point, Quad, Rotation } from '../workers/image/types';
 
 interface Source {
   imagePath: string;
@@ -24,6 +24,7 @@ interface RenderRequest extends Source {
   denoise: boolean;
   quality: ImageQuality;
   enhance?: boolean;
+  dewarp?: boolean;
   maxDimension?: number;
   jpegQuality?: number;
 }
@@ -257,7 +258,8 @@ export function detectQuad({ imagePath }: Source): Promise<Detection> {
     if (!workerDisabled) {
       try {
         const reply = await sendToWorker(frame, { type: 'detect' });
-        if (reply.type === 'detect' && reply.result && Number.isFinite(reply.result.confidence)) return reply.result;
+        if (reply.type === 'detect' && reply.result?.cornerConfidences?.length === 4
+          && Number.isFinite(reply.result.confidence)) return reply.result;
         useLocalFallback();
       } catch {
         useLocalFallback();
@@ -284,7 +286,7 @@ async function renderFrame(frame: Frame, options: RenderOptions): Promise<Frame>
 }
 
 export function renderPage({
-  imagePath, corners, rotation, mode, denoise, enhance, quality, maxDimension, jpegQuality,
+  imagePath, corners, rotation, mode, denoise, enhance, dewarp, quality, maxDimension, jpegQuality,
 }: RenderRequest): Promise<ImageFile> {
   return serialize(async () => {
     const fallbackEdge = quality === 'preview' ? 880 : 2200;
@@ -294,7 +296,7 @@ export function renderPage({
     const outputQuality = Number.isFinite(jpegQuality) && jpegQuality !== undefined
       ? Math.max(0, Math.min(1, jpegQuality)) : fallbackQuality;
     const frame = await readFrame(imagePath, quality === 'preview' ? Math.max(1024, outputEdge) : MAX_WORKING_EDGE);
-    const result = await renderFrame(frame, { corners, rotation, mode, denoise, enhance, maxDimension: outputEdge });
+    const result = await renderFrame(frame, { corners, rotation, mode, denoise, enhance, dewarp, maxDimension: outputEdge });
 
     const { canvas, context } = canvas2d();
     canvas.width = result.width;
