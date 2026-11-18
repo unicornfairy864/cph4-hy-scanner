@@ -6,8 +6,8 @@
       <view class="crop-image" style="width:{{cropWidth}}px;height:{{cropHeight}}px">
         <image class="crop-photo" src="{{source}}" mode="scaleToFill" />
         <view wx:for="{{cornerEdges}}" wx:key="*this" class="crop-edge" style="{{item}}" />
-        <view wx:for="{{corners}}" wx:key="*this" class="crop-handle" style="left:{{item.x * 100}}%;top:{{item.y * 100}}%"
-          data-index="{{index}}" catchtouchstart="dragStart" catchtouchmove="dragMove" catchtouchend="dragEnd" catchtouchcancel="dragEnd">
+        <view wx:for="{{handleIndices}}" wx:key="*this" class="crop-handle" style="left:{{corners[item].x * 100}}%;top:{{corners[item].y * 100}}%"
+          data-index="{{item}}" catchtouchstart="dragStart" catchtouchmove="dragMove" catchtouchend="dragEnd" catchtouchcancel="dragEnd">
           <view class="handle-circle" />
         </view>
       </view>
@@ -47,6 +47,8 @@
           <button class="secondary" bindtap="rotate" disabled="{{!!busy}}">顺时针旋转</button>
           <button class="secondary" bindtap="saveJpg" disabled="{{!!busy}}">保存 JPG</button>
         </view>
+        <button wx:if="{{needsAlbumAccess}}" class="secondary full-width" open-type="openSetting"
+          bindopensetting="refreshAlbumPermission" disabled="{{!!busy}}">开启相册保存权限</button>
       </view>
 
       <view class="panel" wx:if="{{candidate}}">

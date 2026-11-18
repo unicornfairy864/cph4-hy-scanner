@@ -19,30 +19,8 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 22
-          package-manager-cache: false
-      - name: Install npm dependencies
-        id: npm-install
-        run: |
-          if [[ -f package-lock.json ]]; then
-            npm ci
-          else
-            npm install --no-audit --no-fund
-            echo 'generated-lock=true' >> "$GITHUB_OUTPUT"
-          fi
-      - name: Save generated npm lockfile
-        if: steps.npm-install.outputs.generated-lock == 'true'
-        uses: actions/upload-artifact@v6
-        with:
-          name: npm-lockfile-${{ github.sha }}
-          path: package-lock.json
-          if-no-files-found: error
-          retention-days: 7
-      - name: Recover generated npm lockfile from logs
-        if: steps.npm-install.outputs.generated-lock == 'true'
-        run: |
-          printf '%s\n' 'SCANNER_NPM_LOCKFILE_BEGIN'
-          gzip -n -c package-lock.json | base64
-          printf '%s\n' 'SCANNER_NPM_LOCKFILE_END'
+          cache: npm
+      - run: npm ci
       - run: npm run typecheck
       - run: npm test
       - run: npm run build

@@ -11,7 +11,9 @@ export async function createScanPdf(count: number, render: (index: number) => Pr
   const document = await PDFDocument.create()
   for (let index = 0; index < count; index += 1) {
     const bytes = await render(index)
-    const image = await document.embedJpg(bytes)
+    // pdf-lib reads the JPEG header from the backing buffer, starting at offset zero.
+    const jpeg = bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength ? bytes : Uint8Array.from(bytes)
+    const image = await document.embedJpg(jpeg)
     const landscape = image.width > image.height
     const width = landscape ? A4_LONG : A4_SHORT
     const height = landscape ? A4_SHORT : A4_LONG

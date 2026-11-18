@@ -183,6 +183,7 @@ button.text-button { color: #185e53; background: transparent; min-height: 58rpx;
   align-items: center;
   background: #173e35;
   border-radius: 24rpx;
+  bottom: 30rpx;
   bottom: calc(30rpx + env(safe-area-inset-bottom));
   box-shadow: 0 12rpx 30rpx #18392a33;
   color: #fff;

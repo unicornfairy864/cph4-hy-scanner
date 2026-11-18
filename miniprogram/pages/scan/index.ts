@@ -56,12 +56,14 @@ interface ScannerData {
   cropWidth: number
   cropHeight: number
   corners: Quad
+  handleIndices: number[]
   cornerEdges: string[]
   modes: typeof modes
   qualities: typeof qualities
   quality: number
   filename: string
   busy: string
+  needsAlbumAccess: boolean
   cloudEnabled: boolean
   cloudRunning: boolean
   candidate: string
@@ -80,7 +82,7 @@ interface ScannerActions {
   importAlbum(): void
   addPages(source: 'camera' | 'album'): Promise<void>
   current(): ScanPage | undefined
-  sync(): void
+  sync(preserveOriginal?: boolean): void
   refreshPreview(): Promise<void>
   invalidate(page: ScanPage): void
   selectPage(event: WechatMiniprogram.TouchEvent): void
@@ -101,6 +103,7 @@ interface ScannerActions {
   removePage(): void
   setFilename(event: WechatMiniprogram.Input): void
   setQuality(event: WechatMiniprogram.TouchEvent): void
+  refreshAlbumPermission(): void
   saveJpg(): Promise<void>
   savePdf(): Promise<void>
   startCloud(event: WechatMiniprogram.TouchEvent): void
@@ -187,8 +190,9 @@ Page<ScannerData, ScannerActions>({
   data: {
     pages: [], pageCount: 0, selected: 0, source: '', preview: '', showOriginal: false, hasEnhanced: false,
     autoDetected: false, mode: 'color', enhance: true, denoise: true, cropOpen: false,
-    cropWidth: 0, cropHeight: 0, corners: fullImageCorners, cornerEdges: [], modes, qualities, quality: 0,
-    filename: '', busy: '', cloudEnabled, cloudRunning: false, candidate: '',
+    cropWidth: 0, cropHeight: 0, corners: fullImageCorners, handleIndices: [0, 1, 2, 3], cornerEdges: [],
+    modes, qualities, quality: 0, filename: '', busy: '', needsAlbumAccess: false,
+    cloudEnabled, cloudRunning: false, candidate: '',
   },
   scans: [],
   currentId: 0,
@@ -258,7 +262,7 @@ Page<ScannerData, ScannerActions>({
     return this.scans[this.selectedPage]
   },
 
-  sync() {
+  sync(preserveOriginal = false) {
     if (this.closed) return
     const page = this.current()
     this.setData({
@@ -267,7 +271,7 @@ Page<ScannerData, ScannerActions>({
       selected: this.selectedPage,
       source: page?.source ?? '',
       preview: page?.enhanced ?? page?.preview ?? page?.source ?? '',
-      showOriginal: false,
+      showOriginal: preserveOriginal && this.data.showOriginal,
       hasEnhanced: Boolean(page?.enhanced),
       autoDetected: page?.autoDetected ?? false,
       mode: page?.mode ?? 'color',
@@ -288,7 +292,7 @@ Page<ScannerData, ScannerActions>({
         return
       }
       page.preview = result.imagePath
-      this.sync()
+      this.sync(true)
     } catch (error) {
       if (this.current() === page && !this.closed && this.previewTurn === preview) {
         notify(errorText(error, '无法处理这张图片。请调整裁剪或重拍。'))
@@ -472,6 +476,14 @@ Page<ScannerData, ScannerActions>({
     if (qualities[quality] && !this.data.busy) this.setData({ quality })
   },
 
+  refreshAlbumPermission() {
+    wx.getSetting({
+      success: ({ authSetting }) => {
+        if (!this.closed) this.setData({ needsAlbumAccess: authSetting['scope.writePhotosAlbum'] === false })
+      },
+    })
+  },
+
   async saveJpg() {
     const page = this.current()
     if (!page || this.data.busy) return
@@ -489,9 +501,15 @@ Page<ScannerData, ScannerActions>({
       await new Promise<void>((resolve, reject) => {
         wx.saveImageToPhotosAlbum({ filePath, success: () => resolve(), fail: reject })
       })
-      if (!this.closed) notify('JPG 已保存到相册。')
+      if (!this.closed) {
+        this.setData({ needsAlbumAccess: false })
+        notify('JPG 已保存到相册。')
+      }
     } catch (error) {
-      if (!this.closed) notify(errorText(error, '无法保存 JPG，请检查相册权限或重试。'))
+      if (!this.closed) {
+        this.refreshAlbumPermission()
+        notify(errorText(error, '无法保存 JPG，请检查相册权限或重试。'))
+      }
     } finally {
       cleanImage(generated)
       if (!this.closed) this.setData({ busy: '' })
@@ -541,7 +559,7 @@ Page<ScannerData, ScannerActions>({
   },
 
   startCloud(event) {
-    const operation = event.currentTarget.dataset.operation
+    const operation: unknown = event.currentTarget.dataset.operation
     const page = this.current()
     if (!cloudEnabled || !page || this.data.busy || (operation !== 'dewarp' && operation !== 'deshadow')) return
     wx.showModal({
