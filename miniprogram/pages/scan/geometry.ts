@@ -53,3 +53,9 @@ export function orientCorners([a, b, c, d]: Quad, rotation: Rotation): Quad {
   }
   return [orient(a), orient(b), orient(c), orient(d)]
 }
+
+export function fitRotatedImageStyle(width: number, height: number, angle: Rotation, frameWidth: number, frameHeight: number): string {
+  const swapSides = angle === 90 || angle === 270
+  const scale = Math.min(frameWidth / (swapSides ? height : width), frameHeight / (swapSides ? width : height))
+  return `width:${width * scale}px;height:${height * scale}px;transform:translate(-50%,-50%) rotate(${angle}deg)`
+}

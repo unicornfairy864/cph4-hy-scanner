@@ -3,8 +3,8 @@ import type { ImageMode, Quad, Rotation } from '../../image'
 import { cloudEnabled, runCloudEnhancement } from '../../services/cloud'
 import type { CloudOperation } from '../../services/cloud'
 import { exportQualities } from '../export/session'
-import type { ExportPage, PdfSession } from '../export/session'
-import { edgeStyles, fitImage, fullImageCorners, isValidCrop, orientCorners } from './geometry'
+import type { ExportPage, PdfSession, PreviewImage } from '../export/session'
+import { edgeStyles, fitImage, fitRotatedImageStyle, fullImageCorners, isValidCrop, orientCorners } from './geometry'
 
 const MAX_PAGES = 30
 const TILE_CARD_WIDTH = 158
@@ -39,7 +39,7 @@ interface ScanPage {
   revision: number
   previewRevision?: number
   renderingRevision?: number
-  preview?: string
+  preview?: PreviewImage
   enhanced?: string
 }
 
@@ -84,6 +84,7 @@ interface DragGhost extends Thumbnail {
 
 interface PreviewLayer {
   path: string
+  style: string
   visible: boolean
 }
 
@@ -130,6 +131,7 @@ interface ScannerActions {
   selectedPage: number
   generatedImages: Set<string>
   rpx: number
+  previewWidth: number
   actualThumbScroll: number
   pagePress?: PagePress
   pagePressTimer?: ReturnType<typeof setTimeout>
@@ -143,7 +145,7 @@ interface ScannerActions {
   current(): ScanPage | undefined
   syncGallery(): void
   syncSelection(resetOriginal?: boolean): void
-  display(path?: string): void
+  display(path?: string, style?: string): void
   paint(): void
   finishPreviewLoad(event: WechatMiniprogram.BaseEvent): void
   failPreviewLoad(event: WechatMiniprogram.BaseEvent): void
@@ -167,6 +169,7 @@ interface ScannerActions {
   closeCrop(): void
   applyCrop(event: { detail: { corners: Quad; rotation: Rotation } }): void
   rotate(): void
+  rotatePage(page: ScanPage, rotation: Rotation): void
   restoreCrop(): void
   selectMode(event: WechatMiniprogram.TouchEvent): void
   toggleEnhance(event: WechatMiniprogram.SwitchChange): void
@@ -245,6 +248,14 @@ function renderOptions(page: ScanPage): Omit<ExportPage, 'enhanced' | 'preview'>
   }
 }
 
+function previewRenderRotation(page: ScanPage): Rotation {
+  return page.dewarp ? page.rotation : 0
+}
+
+function hasCurrentPreview(page: ScanPage): boolean {
+  return page.previewRevision === page.revision && page.preview?.rotation === previewRenderRotation(page)
+}
+
 Page<ScannerData, ScannerActions>({
   data: {
     pages: [], pageCount: 0, selected: 0, source: '', previewLayers: [], previewHeight: 0,
@@ -261,6 +272,7 @@ Page<ScannerData, ScannerActions>({
   selectedPage: 0,
   generatedImages: new Set(),
   rpx: 0.5,
+  previewWidth: 0,
   actualThumbScroll: 0,
   suppressTapUntil: 0,
   closed: false,
@@ -271,6 +283,7 @@ Page<ScannerData, ScannerActions>({
     this.generatedImages = new Set()
     const window = wx.getWindowInfo ? wx.getWindowInfo() : wx.getSystemInfoSync()
     this.rpx = window.windowWidth / 750
+    this.previewWidth = window.windowWidth - 40 * this.rpx
     this.setData({ previewHeight: Math.round(window.windowHeight * 0.4) })
   },
 
@@ -304,7 +317,7 @@ Page<ScannerData, ScannerActions>({
     let skipCrop = false
     try {
       const paths = await selectImages(source, source === 'camera' ? 1 : Math.min(9, openSlots))
-      skipCrop = start === 0 && paths.length > 1
+      skipCrop = paths.length > 1
       for (let index = 0; index < paths.length && !this.closed; index += 1) {
         this.setData({ busy: `正在识别第 ${index + 1} / ${paths.length} 张` })
         try {
@@ -332,7 +345,7 @@ Page<ScannerData, ScannerActions>({
         this.syncGallery()
         this.syncSelection(true)
         this.setData({ thumbAnchor: `scan-page-${this.current()?.id}` })
-        if (!skipCrop) this.paint()
+        if (!skipCrop || start > 0) this.paint()
       }
       if (rejected) notify(`${rejected} 张图片读取失败，请重试。`)
     } catch (error) {
@@ -387,30 +400,40 @@ Page<ScannerData, ScannerActions>({
     })
   },
 
-  display(path) {
+  display(path, style = '') {
     const layers = this.data.previewLayers
     const visible = layers.find((layer) => layer.visible)
     if (!path || visible?.path === path) {
-      if (layers.length && (layers.length !== 1 || !path)) {
-        this.setData({ previewLayers: path && visible ? [visible] : [] }, () => this.releaseUnusedImages())
+      if (layers.length && (layers.length !== 1 || !path || visible?.style !== style)) {
+        this.setData({ previewLayers: path && visible ? [{ ...visible, style }] : [] }, () => this.releaseUnusedImages())
       }
       return
     }
-    if (layers.some((layer) => layer.path === path)) return
-    const staged = { path, visible: false }
+    if (layers.some((layer) => layer.path === path && layer.style === style)) return
+    const staged = { path, style, visible: false }
     this.setData({ previewLayers: visible ? [visible, staged] : [staged] }, () => this.releaseUnusedImages())
   },
 
   paint() {
     const page = this.current()
-    if (!page) this.display()
-    else this.display(this.data.showOriginal ? page.source : page.enhanced ?? page.preview ?? page.source)
+    if (!page) {
+      this.display()
+      return
+    }
+    if (this.data.showOriginal || page.enhanced) {
+      this.display(this.data.showOriginal ? page.source : page.enhanced)
+      return
+    }
+    const preview = page.preview ?? { imagePath: page.source, width: page.width, height: page.height, rotation: 0 }
+    const angle = ((page.rotation - preview.rotation + 360) % 360) as Rotation
+    this.display(preview.imagePath, fitRotatedImageStyle(preview.width, preview.height, angle, this.previewWidth, this.data.previewHeight))
   },
 
   finishPreviewLoad(event) {
     const path: unknown = event.currentTarget.dataset.path
-    if (typeof path !== 'string' || !this.data.previewLayers.some((layer) => layer.path === path && !layer.visible)) return
-    this.setData({ previewLayers: [{ path, visible: true }] }, () => this.releaseUnusedImages())
+    const ready = this.data.previewLayers.find((layer) => layer.path === path && !layer.visible)
+    if (!ready) return
+    this.setData({ previewLayers: [{ ...ready, visible: true }] }, () => this.releaseUnusedImages())
   },
 
   failPreviewLoad(event) {
@@ -425,7 +448,7 @@ Page<ScannerData, ScannerActions>({
     if (this.data.candidate) used.add(this.data.candidate)
     for (const page of this.scans) {
       used.add(page.source)
-      if (page.preview) used.add(page.preview)
+      if (page.preview) used.add(page.preview.imagePath)
       if (page.enhanced) used.add(page.enhanced)
     }
     for (const path of this.generatedImages) {
@@ -437,28 +460,31 @@ Page<ScannerData, ScannerActions>({
 
   async refreshPreview() {
     const page = this.current()
-    if (!page || page.previewRevision === page.revision || page.renderingRevision !== undefined || page.enhanced || this.data.cropOpen) return
+    if (!page || hasCurrentPreview(page) || page.renderingRevision !== undefined || page.enhanced || this.data.cropOpen) return
     const revision = page.revision
+    const rotation = previewRenderRotation(page)
     page.renderingRevision = revision
     try {
-      const result = await renderPage({ ...renderOptions(page), quality: 'preview' })
-      if (this.closed || !this.scans.includes(page) || revision !== page.revision) {
+      const result = await renderPage({ ...renderOptions(page), rotation, quality: 'preview' })
+      if (this.closed || !this.scans.includes(page) || revision !== page.revision || rotation !== previewRenderRotation(page)) {
         removeFile(result.imagePath)
         return
       }
       this.generatedImages.add(result.imagePath)
-      page.preview = result.imagePath
+      page.preview = { ...result, rotation }
       page.previewRevision = revision
       if (this.current() === page && !this.data.showOriginal && !this.data.cropOpen) this.paint()
       else this.releaseUnusedImages()
     } catch (error) {
-      if (this.current() === page && !this.closed && revision === page.revision) {
-        if (!this.data.previewLayers.length) this.paint()
+      if (this.current() === page && !this.closed && revision === page.revision && rotation === previewRenderRotation(page)) {
+        this.paint()
         notify(errorText(error, '无法处理这张图片。请调整裁剪或重拍。'))
       }
     } finally {
       page.renderingRevision = undefined
-      if (!this.closed && revision !== page.revision && this.current() === page) void this.refreshPreview()
+      if (!this.closed && this.current() === page && (revision !== page.revision || rotation !== previewRenderRotation(page))) {
+        void this.refreshPreview()
+      }
     }
   },
 
@@ -527,11 +553,11 @@ Page<ScannerData, ScannerActions>({
       page.corners = copyCorners(corners)
       page.cornerConfidences = [1, 1, 1, 1]
       page.autoDetected = true
-    }
-    if (cropChanged || rotationChanged) {
       page.rotation = rotation
       this.syncGallery()
       this.invalidate(page)
+    } else if (rotationChanged) {
+      this.rotatePage(page, rotation)
     } else {
       this.paint()
       void this.refreshPreview()
@@ -541,9 +567,17 @@ Page<ScannerData, ScannerActions>({
   rotate() {
     const page = this.current()
     if (!page || this.data.busy || this.pageDrag) return
-    page.rotation = ((page.rotation + 90) % 360) as Rotation
+    this.rotatePage(page, ((page.rotation + 90) % 360) as Rotation)
+  },
+
+  rotatePage(page, rotation) {
+    page.rotation = rotation
+    page.enhanced = undefined
+    this.setData({ candidate: '', deleteArmed: -1 }, () => this.releaseUnusedImages())
     this.syncGallery()
-    this.invalidate(page)
+    this.syncSelection()
+    this.paint()
+    void this.refreshPreview()
   },
 
   restoreCrop() {
@@ -801,7 +835,7 @@ Page<ScannerData, ScannerActions>({
     if (!this.scans.length || this.data.busy || this.pageDrag) return
     const pages = this.scans.map((page) => ({
       ...renderOptions(page), corners: copyCorners(page.corners), enhanced: page.enhanced,
-      preview: page.previewRevision === page.revision ? page.preview : undefined,
+      preview: hasCurrentPreview(page) ? page.preview : undefined,
     }))
     const session: PdfSession = { pages, selected: this.selectedPage }
     this.setData({ busy: '正在打开导出页', deleteArmed: -1 })

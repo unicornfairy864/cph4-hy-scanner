@@ -32,7 +32,7 @@
 
       <view class="image-frame" style="height:{{previewHeight}}px">
         <image wx:for="{{previewLayers}}" wx:key="path" class="page-image {{item.visible ? 'page-image-visible' : ''}}"
-          src="{{item.path}}" data-path="{{item.path}}" mode="aspectFit" bindload="finishPreviewLoad" binderror="failPreviewLoad" />
+          src="{{item.path}}" data-path="{{item.path}}" style="{{item.style}}" mode="aspectFit" bindload="finishPreviewLoad" binderror="failPreviewLoad" />
         <button class="image-arrow image-arrow-prev" data-direction="-1" bindtap="changePage"
           disabled="{{!!busy || selected === 0}}" aria-label="上一页">‹</button>
         <button class="image-arrow image-arrow-next" data-direction="1" bindtap="changePage"

@@ -1,5 +1,7 @@
 import { renderPage } from '../../image'
 import { createScanPdf, readImageBytes, writeScanPdf } from '../../services/pdf'
+import type { Rotation } from '../../image'
+import { fitRotatedImageStyle } from '../scan/geometry'
 import { exportQualities } from './session'
 import type { PdfSession } from './session'
 
@@ -12,6 +14,7 @@ interface ExportData {
   quality: number
   busy: string
   preview: string
+  previewStyle: string
 }
 
 interface ExportActions {
@@ -20,6 +23,8 @@ interface ExportActions {
   lastPdf?: string
   previews: Map<number, string>
   renderingPreviews: Set<number>
+  frameWidth: number
+  frameHeight: number
   onLoad(): void
   onUnload(): void
   setFilename(event: WechatMiniprogram.Input): void
@@ -45,14 +50,20 @@ function filename(input: string): string {
 }
 
 Page<ExportData, ExportActions>({
-  data: { selected: 0, pageCount: 0, scope: 'all', filename: '', qualities: exportQualities, quality: 0, busy: '', preview: '' },
+  data: { selected: 0, pageCount: 0, scope: 'all', filename: '', qualities: exportQualities, quality: 0, busy: '', preview: '', previewStyle: '' },
   closed: false,
   previews: new Map(),
   renderingPreviews: new Set(),
+  frameWidth: 0,
+  frameHeight: 0,
 
   onLoad() {
     this.previews = new Map()
     this.renderingPreviews = new Set()
+    const window = wx.getWindowInfo ? wx.getWindowInfo() : wx.getSystemInfoSync()
+    const rpx = window.windowWidth / 750
+    this.frameWidth = window.windowWidth - 122 * rpx
+    this.frameHeight = Math.min(window.windowHeight * 0.44, 860 * rpx)
     this.getOpenerEventChannel?.()?.on?.('scanExport', (session: PdfSession) => {
       if (this.closed) return
       this.session = session
@@ -95,9 +106,14 @@ Page<ExportData, ExportActions>({
     const selected = this.data.selected
     const page = this.session?.pages[selected]
     if (!page) return
-    const ready = page.enhanced ?? page.preview ?? this.previews.get(selected)
+    const ready = page.enhanced ?? page.preview?.imagePath ?? this.previews.get(selected)
     const preview = ready ?? page.imagePath
-    if (this.data.preview !== preview) this.setData({ preview })
+    let previewStyle = ''
+    if (!page.enhanced && page.preview) {
+      const rotation = ((page.rotation - page.preview.rotation + 360) % 360) as Rotation
+      previewStyle = fitRotatedImageStyle(page.preview.width, page.preview.height, rotation, this.frameWidth, this.frameHeight)
+    }
+    if (this.data.preview !== preview || this.data.previewStyle !== previewStyle) this.setData({ preview, previewStyle })
     if (ready || this.renderingPreviews.has(selected)) return
     this.renderingPreviews.add(selected)
     try {
@@ -107,7 +123,7 @@ Page<ExportData, ExportActions>({
         return
       }
       this.previews.set(selected, result.imagePath)
-      if (this.data.selected === selected) this.setData({ preview: result.imagePath })
+      if (this.data.selected === selected) this.setData({ preview: result.imagePath, previewStyle: '' })
     } catch {
       // The source image stays visible if a local preview cannot be generated.
     } finally {

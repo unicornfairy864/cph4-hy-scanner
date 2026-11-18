@@ -1,7 +1,7 @@
 <view class="export-page">
   <view class="export-card" wx:if="{{pageCount}}">
     <view class="preview-frame">
-      <image class="preview-image" src="{{preview}}" mode="aspectFit" />
+      <image class="preview-image" src="{{preview}}" style="{{previewStyle}}" mode="aspectFit" />
       <button class="preview-arrow preview-prev" data-direction="-1" bindtap="changePage" disabled="{{!!busy || selected === 0}}" aria-label="上一页">‹</button>
       <button class="preview-arrow preview-next" data-direction="1" bindtap="changePage" disabled="{{!!busy || selected === pageCount - 1}}" aria-label="下一页">›</button>
       <view class="preview-count">{{selected + 1}} / {{pageCount}}</view>

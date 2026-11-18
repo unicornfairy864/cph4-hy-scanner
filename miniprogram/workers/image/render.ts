@@ -115,6 +115,8 @@ function removeIsolatedPixels(frame: Frame): void {
     for (let x = 1; x < width - 1; x++) {
       const position = y * width + x;
       const center = values[position];
+      // A similar neighbor rules out an isolated high-contrast pixel.
+      if (Math.abs(center - values[position - width]) < 38) continue;
       let low = 255;
       let high = 0;
       for (let row = -1; row <= 1; row++) {
