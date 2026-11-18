@@ -53,7 +53,7 @@ Page<ExportData, ExportActions>({
   onLoad() {
     this.previews = new Map()
     this.renderingPreviews = new Set()
-    this.getOpenerEventChannel?.()?.on('scanExport', (session: PdfSession) => {
+    this.getOpenerEventChannel?.()?.on?.('scanExport', (session: PdfSession) => {
       if (this.closed) return
       this.session = session
       this.setData({ selected: session.selected, pageCount: session.pages.length })
