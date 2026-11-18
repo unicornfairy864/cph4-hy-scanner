@@ -50,6 +50,7 @@
 
 .edge-pill { border-radius: 10rpx; height: 12rpx; width: 36rpx; }
 .corner-dot { border-radius: 50%; height: 24rpx; width: 24rpx; }
+.corner-handle-low .corner-dot { border-color: #f9da90; }
 .handle-active > view { background: #1b8a72; }
 
 .lens {

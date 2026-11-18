@@ -51,6 +51,7 @@ Component({
     height: Number,
     autoDetected: Boolean,
     partialDetected: Boolean,
+    cornerConfidences: Array,
   },
 
   data: {

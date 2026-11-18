@@ -12,7 +12,7 @@
           data-index="{{item.index}}" data-kind="edge" catchtouchstart="startDrag" catchtouchmove="drag" catchtouchend="endDrag" catchtouchcancel="endDrag">
           <view class="edge-pill" />
         </view>
-        <view class="handle corner-handle {{active === 'corner-' + item.index ? 'handle-active' : ''}}" style="{{item.corner}}"
+        <view class="handle corner-handle {{partialDetected && cornerConfidences[item.index] < 0.52 ? 'corner-handle-low' : ''}} {{active === 'corner-' + item.index ? 'handle-active' : ''}}" style="{{item.corner}}"
           data-index="{{item.index}}" data-kind="corner" catchtouchstart="startDrag" catchtouchmove="drag" catchtouchend="endDrag" catchtouchcancel="endDrag">
           <view class="corner-dot" />
         </view>

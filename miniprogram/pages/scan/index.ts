@@ -128,8 +128,8 @@ interface ScannerActions {
   selectPage(event: WechatMiniprogram.TouchEvent): void
   activatePage(index: number, scrollToPage?: boolean): void
   changePage(event: WechatMiniprogram.TouchEvent): void
-  onControlsScroll(event: WechatMiniprogram.BaseEvent<{ scrollTop: number }>): void
-  onThumbnailsScroll(event: WechatMiniprogram.BaseEvent<{ scrollLeft: number }>): void
+  onControlsScroll(event: { detail: { scrollTop: number } }): void
+  onThumbnailsScroll(event: { detail: { scrollLeft: number } }): void
   startPageDrag(event: WechatMiniprogram.TouchEvent): void
   updatePageDrag(): void
   movePageDrag(event: WechatMiniprogram.TouchEvent): void
@@ -137,9 +137,10 @@ interface ScannerActions {
   cancelPageDrag(): void
   stopPageDrag(): void
   relocatePage(from: number, to: number): void
+  moveSelectedPage(event: WechatMiniprogram.TouchEvent): void
   openCrop(): void
   closeCrop(): void
-  applyCrop(event: WechatMiniprogram.BaseEvent<{ corners: Quad }>): void
+  applyCrop(event: { detail: { corners: Quad } }): void
   rotate(): void
   selectMode(event: WechatMiniprogram.TouchEvent): void
   toggleEnhance(event: WechatMiniprogram.SwitchChange): void
@@ -205,7 +206,7 @@ function copyCorners(corners: Quad): Quad {
   return [{ ...first }, { ...second }, { ...third }, { ...fourth }]
 }
 
-function renderOptions(page: ScanPage): Omit<ExportPage, 'enhanced'> {
+function renderOptions(page: ScanPage): Omit<ExportPage, 'enhanced' | 'preview'> {
   return {
     imagePath: page.source,
     corners: page.corners,
@@ -432,13 +433,18 @@ Page<ScannerData, ScannerActions>({
   invalidate(page) {
     page.revision += 1
     page.enhanced = undefined
-    this.setData({ candidate: '', deleteArmed: -1 }, () => this.releaseUnusedImages())
+    const previewLayers = this.data.showOriginal
+      ? this.data.previewLayers
+      : this.data.previewLayers.filter((layer) => layer.visible || layer.path === page.source)
+    this.setData({ candidate: '', deleteArmed: -1, previewLayers }, () => this.releaseUnusedImages())
     this.syncSelection()
     void this.refreshPreview()
   },
 
   selectPage(event) {
-    this.activatePage(Number(event.currentTarget.dataset.index))
+    const index = Number(event.currentTarget.dataset.index)
+    if (index === this.selectedPage && this.data.deleteArmed >= 0) this.setData({ deleteArmed: -1 })
+    else this.activatePage(index)
   },
 
   activatePage(index, scrollToPage = false) {
@@ -641,6 +647,18 @@ Page<ScannerData, ScannerActions>({
     this.syncSelection()
   },
 
+  moveSelectedPage(event) {
+    const direction = Number(event.currentTarget.dataset.direction)
+    if ((direction !== -1 && direction !== 1) || this.data.busy || this.pageDrag) return
+    const next = this.selectedPage + direction
+    if (!this.scans[next]) return
+    this.relocatePage(this.selectedPage, next)
+    this.setData({ deleteArmed: -1, thumbAnchor: '' }, () => {
+      const page = this.current()
+      if (page && !this.closed) this.setData({ thumbAnchor: `scan-page-${page.id}` })
+    })
+  },
+
   removePage(event) {
     const page = this.current()
     if (!page || this.data.busy || this.pageDrag || Number(event.currentTarget.dataset.id) !== page.id) return
@@ -663,7 +681,10 @@ Page<ScannerData, ScannerActions>({
 
   openExport() {
     if (!this.scans.length || this.data.busy || this.pageDrag) return
-    const pages = this.scans.map((page) => ({ ...renderOptions(page), corners: copyCorners(page.corners), enhanced: page.enhanced }))
+    const pages = this.scans.map((page) => ({
+      ...renderOptions(page), corners: copyCorners(page.corners), enhanced: page.enhanced,
+      preview: page.previewRevision === page.revision ? page.preview : undefined,
+    }))
     const session: PdfSession = { pages, selected: this.selectedPage }
     this.setData({ busy: '正在打开导出页', deleteArmed: -1 })
     wx.navigateTo({

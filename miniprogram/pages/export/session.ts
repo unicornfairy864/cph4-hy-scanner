@@ -14,6 +14,7 @@ export interface ExportPage {
   denoise: boolean
   dewarp: boolean
   enhanced?: string
+  preview?: string
 }
 
 export interface PdfSession {

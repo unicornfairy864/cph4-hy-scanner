@@ -109,7 +109,7 @@ button[disabled] { opacity: 0.5; }
 
 .segment > .segment-active { background: #fff; color: #174e44; box-shadow: 0 2rpx 6rpx #173e351f; }
 .preview-actions { display: flex; gap: 10rpx; }
-button.icon-button, button.small-arrow, button.add-button {
+button.icon-button {
   align-items: center;
   background: #e2ebe3;
   color: #174e44;
@@ -121,7 +121,7 @@ button.icon-button, button.small-arrow, button.add-button {
   width: 64rpx;
 }
 
-button.next-step, button.add-button { background: #185e53; color: #fff; }
+button.next-step { background: #185e53; color: #fff; }
 .save-symbol { border-bottom: 3rpx solid currentColor; display: block; font-size: 36rpx; line-height: 32rpx; margin-top: -2rpx; min-width: 29rpx; padding-bottom: 3rpx; }
 
 .image-frame {
@@ -159,11 +159,8 @@ button.image-arrow[disabled] { opacity: 0.3; }
 
 .controls-scroll { display: block; flex: 1; height: 0; min-height: 0; width: 100%; }
 .controls-content { box-sizing: border-box; padding: 0 20rpx 24rpx; padding-bottom: calc(24rpx + env(safe-area-inset-bottom)); }
-.organizer-row { align-items: center; display: flex; gap: 8rpx; margin-top: 16rpx; }
-button.small-arrow, button.add-button { flex: none; min-height: 54rpx; width: 44rpx; }
-button.small-arrow { background: transparent; font-size: 38rpx; }
-button.add-button { font-size: 32rpx; width: 52rpx; }
-.thumbnail-strip { flex: 1; min-width: 0; white-space: nowrap; }
+.thumbnail-row { margin-top: 16rpx; }
+.thumbnail-strip { white-space: nowrap; width: 100%; }
 .thumbnail-track { display: inline-flex; padding: 8rpx 0; vertical-align: top; }
 
 .thumbnail {
@@ -207,6 +204,9 @@ button.page-delete {
 }
 
 button.page-delete-armed { background: #a7382e; padding: 0 11rpx; }
+.organizer-actions { margin-top: 8rpx; }
+button.organizer-button { align-items: center; display: flex; gap: 10rpx; justify-content: center; }
+.organizer-symbol { font-size: 30rpx; line-height: 1; }
 .organizer-edits { margin-top: 14rpx; }
 .options { margin: 16rpx 0; }
 .active-cloud { margin-top: 8rpx; }

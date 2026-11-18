@@ -25,7 +25,7 @@
         </view>
         <view class="preview-actions">
           <button class="icon-button" bindtap="saveJpg" disabled="{{!!busy}}" aria-label="保存 JPG"><text class="save-symbol" aria-hidden="true">↓</text></button>
-          <button class="icon-button next-step" bindtap="openExport" disabled="{{!!busy}}" aria-label="下一步，导出 PDF"><text aria-hidden="true">→</text></button>
+          <button class="icon-button next-step" bindtap="openExport" disabled="{{!!busy}}" aria-label="下一步，导出 PDF"><text aria-hidden="true">↗</text></button>
         </view>
       </view>
 
@@ -46,8 +46,7 @@
             <view class="heading">整理页面</view>
             <view wx:if="{{pageCount > 1}}" class="support">拖动下方手柄排序</view>
           </view>
-          <view class="organizer-row">
-            <button class="small-arrow" data-direction="-1" bindtap="changePage" disabled="{{!!busy || selected === 0}}" aria-label="上一页">‹</button>
+          <view class="thumbnail-row">
             <scroll-view class="thumbnail-strip" scroll-x enhanced show-scrollbar="{{false}}" scroll-left="{{thumbScrollLeft}}"
               scroll-into-view="{{thumbAnchor}}" bindscroll="onThumbnailsScroll" aria-label="扫描页列表">
               <view class="thumbnail-track">
@@ -61,7 +60,7 @@
                   </view>
                   <button wx:if="{{selected === index}}" class="page-delete {{deleteArmed === item.id ? 'page-delete-armed' : ''}}"
                     data-id="{{item.id}}" catchtap="removePage" disabled="{{!!busy || dragId >= 0}}"
-                    aria-label="{{deleteArmed === item.id ? '确认删除当前页' : '删除当前页'}}">{{deleteArmed === item.id ? '确认' : '×'}}</button>
+                    aria-label="{{deleteArmed === item.id ? '确认删除当前页' : '删除当前页'}}">{{deleteArmed === item.id ? '删除' : '×'}}</button>
                   <view class="thumbnail-foot">
                     <text class="thumbnail-number">{{index + 1}}</text>
                     <view wx:if="{{pageCount > 1}}" class="drag-handle" data-index="{{index}}" catchtouchstart="startPageDrag"
@@ -70,8 +69,11 @@
                 </view>
               </view>
             </scroll-view>
-            <button class="small-arrow" data-direction="1" bindtap="changePage" disabled="{{!!busy || selected === pageCount - 1}}" aria-label="下一页">›</button>
-            <button class="add-button" bindtap="showImportOptions" disabled="{{!!busy}}" aria-label="添加图片">＋</button>
+          </view>
+          <view class="button-row organizer-actions">
+            <button class="secondary organizer-button" data-direction="-1" bindtap="moveSelectedPage" disabled="{{!!busy || selected === 0 || dragId >= 0}}"><text class="organizer-symbol" aria-hidden="true">←</text><text>左移</text></button>
+            <button class="secondary organizer-button" data-direction="1" bindtap="moveSelectedPage" disabled="{{!!busy || selected === pageCount - 1 || dragId >= 0}}"><text class="organizer-symbol" aria-hidden="true">→</text><text>右移</text></button>
+            <button class="primary organizer-button" bindtap="showImportOptions" disabled="{{!!busy || dragId >= 0}}"><text class="organizer-symbol" aria-hidden="true">＋</text><text>新增</text></button>
           </view>
           <view class="button-row organizer-edits">
             <button class="secondary" bindtap="openCrop" disabled="{{!!busy}}">调整四角</button>

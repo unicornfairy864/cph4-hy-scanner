@@ -11,17 +11,22 @@ interface ExportData {
   qualities: typeof exportQualities
   quality: number
   busy: string
+  preview: string
 }
 
 interface ExportActions {
   session?: PdfSession
   closed: boolean
   lastPdf?: string
+  previews: Map<number, string>
+  renderingPreviews: Set<number>
   onLoad(): void
   onUnload(): void
   setFilename(event: WechatMiniprogram.Input): void
   selectQuality(event: WechatMiniprogram.TouchEvent): void
   selectScope(event: WechatMiniprogram.TouchEvent): void
+  changePage(event: WechatMiniprogram.TouchEvent): void
+  showPreview(): Promise<void>
   savePdf(): Promise<void>
 }
 
@@ -30,26 +35,37 @@ function cleanPdf(filePath: string): void {
   wx.getFileSystemManager().rmdir({ dirPath, recursive: true, fail: () => undefined })
 }
 
+function cleanImage(filePath: string): void {
+  wx.getFileSystemManager().unlink({ filePath, fail: () => undefined })
+}
+
 function filename(input: string): string {
   const title = input.trim().replace(/\.pdf$/i, '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').slice(0, 70)
   return title || `扫描文档-${new Date().toISOString().slice(0, 10)}`
 }
 
 Page<ExportData, ExportActions>({
-  data: { selected: 0, pageCount: 0, scope: 'all', filename: '', qualities: exportQualities, quality: 0, busy: '' },
+  data: { selected: 0, pageCount: 0, scope: 'all', filename: '', qualities: exportQualities, quality: 0, busy: '', preview: '' },
   closed: false,
+  previews: new Map(),
+  renderingPreviews: new Set(),
 
   onLoad() {
+    this.previews = new Map()
+    this.renderingPreviews = new Set()
     this.getOpenerEventChannel?.()?.on('scanExport', (session: PdfSession) => {
       if (this.closed) return
       this.session = session
       this.setData({ selected: session.selected, pageCount: session.pages.length })
+      void this.showPreview()
     })
   },
 
   onUnload() {
     this.closed = true
     if (this.lastPdf) cleanPdf(this.lastPdf)
+    for (const path of this.previews.values()) cleanImage(path)
+    this.previews.clear()
   },
 
   setFilename(event) {
@@ -66,10 +82,43 @@ Page<ExportData, ExportActions>({
     if ((scope === 'all' || scope === 'current') && !this.data.busy) this.setData({ scope })
   },
 
+  changePage(event) {
+    const direction = Number(event.currentTarget.dataset.direction)
+    if ((direction !== -1 && direction !== 1) || this.data.busy) return
+    const selected = this.data.selected + direction
+    if (!this.session?.pages[selected]) return
+    this.setData({ selected })
+    void this.showPreview()
+  },
+
+  async showPreview() {
+    const selected = this.data.selected
+    const page = this.session?.pages[selected]
+    if (!page) return
+    const ready = page.enhanced ?? page.preview ?? this.previews.get(selected)
+    const preview = ready ?? page.imagePath
+    if (this.data.preview !== preview) this.setData({ preview })
+    if (ready || this.renderingPreviews.has(selected)) return
+    this.renderingPreviews.add(selected)
+    try {
+      const result = await renderPage({ ...page, quality: 'preview' })
+      if (this.closed) {
+        cleanImage(result.imagePath)
+        return
+      }
+      this.previews.set(selected, result.imagePath)
+      if (this.data.selected === selected) this.setData({ preview: result.imagePath })
+    } catch {
+      // The source image stays visible if a local preview cannot be generated.
+    } finally {
+      this.renderingPreviews.delete(selected)
+    }
+  },
+
   async savePdf() {
     const session = this.session
     if (!session?.pages.length || this.data.busy) return
-    const pages = this.data.scope === 'current' ? [session.pages[session.selected]] : session.pages
+    const pages = this.data.scope === 'current' ? [session.pages[this.data.selected]] : session.pages
     const options = exportQualities[this.data.quality]
     const dirPath = `${wx.env.USER_DATA_PATH}/scan-exports/${Date.now()}`
     const filePath = `${dirPath}/${filename(this.data.filename)}.pdf`
@@ -83,7 +132,7 @@ Page<ExportData, ExportActions>({
         try {
           return await readImageBytes(result.imagePath)
         } finally {
-          wx.getFileSystemManager().unlink({ filePath: result.imagePath, fail: () => undefined })
+          cleanImage(result.imagePath)
         }
       })
       if (this.closed) return
