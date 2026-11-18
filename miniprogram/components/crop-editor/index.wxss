@@ -91,6 +91,7 @@
 }
 
 .actions > button { flex: 1; min-width: 0; }
+.rotate-symbol { display: inline-block; font-size: 30rpx; line-height: 1; margin-right: 5rpx; }
 .zoom-controls > .zoom-button { font-size: 32rpx; min-height: 64rpx; padding: 12rpx 0; width: 76rpx; }
 .actions > button::after,
 .zoom-controls > button::after { border: none; }

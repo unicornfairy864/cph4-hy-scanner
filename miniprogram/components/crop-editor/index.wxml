@@ -32,7 +32,7 @@
     <button class="secondary" bindtap="cancelCrop">取消</button>
     <button class="secondary" bindtap="resetCrop">整张图片</button>
     <button class="secondary" bindtap="detectCrop" disabled="{{detecting}}">{{detecting ? '识别中…' : '自动识别'}}</button>
-    <button class="secondary" bindtap="rotateCrop" aria-label="顺时针旋转九十度">旋转</button>
+    <button class="secondary" bindtap="rotateCrop" aria-label="顺时针旋转九十度"><text class="rotate-symbol" aria-hidden="true">↻</text>旋转</button>
   </view>
   <view class="actions apply-row">
     <button class="primary" bindtap="applyCrop">应用裁切</button>
