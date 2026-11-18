@@ -37,6 +37,12 @@ jobs:
           path: package-lock.json
           if-no-files-found: error
           retention-days: 7
+      - name: Recover generated npm lockfile from logs
+        if: steps.npm-install.outputs.generated-lock == 'true'
+        run: |
+          printf '%s\n' 'SCANNER_NPM_LOCKFILE_BEGIN'
+          gzip -n -c package-lock.json | base64
+          printf '%s\n' 'SCANNER_NPM_LOCKFILE_END'
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
