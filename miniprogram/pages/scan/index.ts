@@ -1,6 +1,6 @@
 import { detectQuad, prepareImage, renderPage } from '../../image'
 import type { ImageMode, Quad, Rotation } from '../../image'
-import { cloudEnabled, runCloudEnhancement } from '../../services/cloud'
+import { cloudEnabled, runCloudEnhancement, runCloudOcr } from '../../services/cloud'
 import type { CloudOperation } from '../../services/cloud'
 import { exportQualities } from '../export/session'
 import type { ExportPage, PdfSession, PreviewImage } from '../export/session'
@@ -25,6 +25,12 @@ const cloudNames = { dewarp: '服务器展平', deshadow: '深阴影处理' }
 type ImageSource = 'camera' | 'album' | 'chat'
 type CornerScores = [number, number, number, number]
 
+interface OcrFeedback {
+  inputKey: string
+  text: string
+  message: string
+}
+
 interface ScanPage {
   id: number
   source: string
@@ -43,6 +49,7 @@ interface ScanPage {
   renderingRevision?: number
   preview?: PreviewImage
   enhanced?: string
+  ocr?: OcrFeedback
 }
 
 interface PagePress {
@@ -142,6 +149,9 @@ interface ScannerData {
   needsAlbumAccess: boolean
   cloudEnabled: boolean
   cloudRunning: boolean
+  ocrRunning: boolean
+  ocrText: string
+  ocrMessage: string
   candidate: string
 }
 
@@ -163,6 +173,8 @@ interface ScannerActions {
   suppressTapUntil: number
   closed: boolean
   cloudTurn: number
+  ocrTurn: number
+  ocrBorrowedInputs: Map<number, string>
   takePhoto(): void
   showImportOptions(): void
   addPages(source: ImageSource): Promise<void>
@@ -213,6 +225,11 @@ interface ScannerActions {
   openExport(): void
   refreshAlbumPermission(): void
   saveJpg(): Promise<void>
+  startOcr(): void
+  recognizePage(page: ScanPage): Promise<void>
+  writeOcrFeedback(page: ScanPage, inputKey: string, text: string, message: string): void
+  cancelOcr(): void
+  copyOcr(): void
   startCloud(event: WechatMiniprogram.TouchEvent): void
   enhanceCloud(page: ScanPage, operation: CloudOperation): Promise<void>
   cancelCloud(): void
@@ -290,6 +307,15 @@ function hasCurrentPreview(page: ScanPage): boolean {
   return page.previewRevision === page.revision && page.preview?.rotation === previewRenderRotation(page)
 }
 
+function ocrImageMode(page: ScanPage): 'color' | 'grayscale' {
+  return page.mode === 'color' ? 'color' : 'grayscale'
+}
+
+function ocrInputKey(page: ScanPage): string {
+  if (page.enhanced) return JSON.stringify([page.enhanced])
+  return JSON.stringify([page.source, page.corners, page.rotation, ocrImageMode(page), page.enhance, page.dewarp])
+}
+
 function scrollProgress(offset: number, maxOffset: number): number {
   return maxOffset > 0 ? Math.round(Math.max(0, Math.min(1, offset / maxOffset)) * THUMB_PROGRESS_MAX) : 0
 }
@@ -304,7 +330,7 @@ Page<ScannerData, ScannerActions>({
     swapFrom: -1, swapTo: -1, swapShift: 0,
     thumbTrackShift: 0, thumbScrollLeft: 0, thumbAnchor: '', thumbMaxOffset: 0, thumbProgress: 0,
     busy: '', needsAlbumAccess: false,
-    cloudEnabled, cloudRunning: false, candidate: '',
+    cloudEnabled, cloudRunning: false, candidate: '', ocrRunning: false, ocrText: '', ocrMessage: '',
   },
   scans: [],
   currentId: 0,
@@ -319,10 +345,13 @@ Page<ScannerData, ScannerActions>({
   suppressTapUntil: 0,
   closed: false,
   cloudTurn: 0,
+  ocrTurn: 0,
+  ocrBorrowedInputs: new Map(),
 
   onLoad() {
     this.scans = []
     this.generatedImages = new Set()
+    this.ocrBorrowedInputs = new Map()
     this.pendingMoves = []
     this.syncWorkspaceSize(wx.getWindowInfo ? wx.getWindowInfo() : wx.getSystemInfoSync())
   },
@@ -391,7 +420,7 @@ Page<ScannerData, ScannerActions>({
         this.selectedPage = start
         this.syncGallery()
         this.syncSelection(true)
-        this.setData({ thumbAnchor: `scan-page-${this.current()?.id}` })
+        this.setData({ thumbAnchor: `scan-page-${this.current()?.id}`, candidate: '' }, () => this.releaseUnusedImages())
         if (!skipCrop || start > 0) this.paint()
       }
       if (rejected) notify(`${rejected} 张图片读取失败，请重试。`)
@@ -441,6 +470,7 @@ Page<ScannerData, ScannerActions>({
   syncSelection(resetOriginal = false) {
     if (this.closed) return
     const page = this.current()
+    if (page?.ocr && page.ocr.inputKey !== ocrInputKey(page)) page.ocr = undefined
     const scores = page?.cornerConfidences ?? [0, 0, 0, 0]
     this.setData({
       selected: this.selectedPage,
@@ -454,6 +484,8 @@ Page<ScannerData, ScannerActions>({
       enhance: page?.enhance ?? true,
       denoise: page?.denoise ?? true,
       dewarp: page?.dewarp ?? false,
+      ocrText: page?.ocr?.text ?? '',
+      ocrMessage: page?.ocr?.message ?? '',
     })
   },
 
@@ -500,13 +532,15 @@ Page<ScannerData, ScannerActions>({
   },
 
   releaseUnusedImages() {
-    if (this.closed) return
-    const used = new Set<string>(this.data.previewLayers.map(({ path }) => path))
-    if (this.data.candidate) used.add(this.data.candidate)
-    for (const page of this.scans) {
-      used.add(page.source)
-      if (page.preview) used.add(page.preview.imagePath)
-      if (page.enhanced) used.add(page.enhanced)
+    const used = new Set(this.ocrBorrowedInputs.values())
+    if (!this.closed) {
+      for (const { path } of this.data.previewLayers) used.add(path)
+      if (this.data.candidate) used.add(this.data.candidate)
+      for (const page of this.scans) {
+        used.add(page.source)
+        if (page.preview) used.add(page.preview.imagePath)
+        if (page.enhanced) used.add(page.enhanced)
+      }
     }
     for (const path of this.generatedImages) {
       if (used.has(path)) continue
@@ -691,6 +725,7 @@ Page<ScannerData, ScannerActions>({
       page.dewarp = current.dewarp
       page.revision += 1
       page.enhanced = undefined
+      if (page.ocr && page.ocr.inputKey !== ocrInputKey(page)) page.ocr = undefined
     }
     this.releaseUnusedImages()
     notify(`增强设置已应用到全部 ${this.scans.length} 页。`)
@@ -1038,6 +1073,87 @@ Page<ScannerData, ScannerActions>({
     }
   },
 
+  startOcr() {
+    const page = this.current()
+    if (!cloudEnabled || !page || this.data.busy || this.data.cropOpen || this.pageDrag || this.buttonSwap) return
+    const inputKey = ocrInputKey(page)
+    const source = page.enhanced ? '将使用已采用的服务器增强图。' : '将按当前裁切与方向准备识别图片。'
+    wx.showModal({
+      title: `识别第 ${this.selectedPage + 1} 页`,
+      content: `${source}只上传这一页至你的 VPS 进行文字识别。`,
+      confirmText: '上传识别',
+      success: ({ confirm }) => {
+        if (!confirm || this.closed || this.data.busy || this.data.cropOpen || this.pageDrag || this.buttonSwap) return
+        if (this.current() === page && ocrInputKey(page) === inputKey) void this.recognizePage(page)
+      },
+    })
+  },
+
+  async recognizePage(page) {
+    const inputKey = ocrInputKey(page)
+    const previousText = page.ocr?.inputKey === inputKey ? page.ocr.text : ''
+    const turn = ++this.ocrTurn
+    const cancelled = () => this.closed || turn !== this.ocrTurn || this.current() !== page || ocrInputKey(page) !== inputKey
+    this.writeOcrFeedback(page, inputKey, previousText, '')
+    this.setData({ ocrRunning: true, busy: '正在准备识别图片', deleteArmed: -1 })
+    let generated: string | undefined
+    try {
+      let imagePath = page.enhanced
+      if (imagePath) this.ocrBorrowedInputs.set(turn, imagePath)
+      else {
+        const options = exportQualities[1]
+        const result = await renderPage({ ...renderOptions(page), ...options, mode: ocrImageMode(page), denoise: false, quality: 'export' })
+        generated = result.imagePath
+        imagePath = generated
+      }
+      if (cancelled()) return
+      this.setData({ busy: '正在上传识别图片' })
+      const result = await runCloudOcr({
+        imagePath,
+        isCancelled: cancelled,
+        onStatus: (status) => {
+          if (cancelled()) return
+          if (status === 'queued') this.setData({ busy: '文字识别正在排队' })
+          if (status === 'running') this.setData({ busy: '正在识别文字' })
+          if (status === 'succeeded') this.setData({ busy: '正在读取识别结果' })
+        },
+      })
+      if (cancelled()) return
+      if (result.text.trim()) this.writeOcrFeedback(page, inputKey, result.text, '')
+      else this.writeOcrFeedback(page, inputKey, previousText, '本次未识别到文字。可以调整裁切或重拍后重试。')
+    } catch (error) {
+      if (!cancelled()) this.writeOcrFeedback(page, inputKey, previousText, errorText(error, '文字识别失败，请重试。'))
+    } finally {
+      if (generated) removeFile(generated)
+      if (this.ocrBorrowedInputs.delete(turn)) this.releaseUnusedImages()
+      if (!this.closed && turn === this.ocrTurn) this.setData({ ocrRunning: false, busy: '' })
+    }
+  },
+
+  writeOcrFeedback(page, inputKey, text, message) {
+    page.ocr = { inputKey, text, message }
+    if (!this.closed && this.current() === page) this.setData({ ocrText: text, ocrMessage: message })
+  },
+
+  cancelOcr() {
+    if (!this.data.ocrRunning) return
+    this.ocrTurn += 1
+    this.setData({ ocrRunning: false, busy: '' })
+    const page = this.current()
+    if (page) {
+      const inputKey = ocrInputKey(page)
+      const previousText = page.ocr?.inputKey === inputKey ? page.ocr.text : ''
+      this.writeOcrFeedback(page, inputKey, previousText, '已取消文字识别。')
+    }
+  },
+
+  copyOcr() {
+    const page = this.current()
+    const ocr = page?.ocr
+    if (!page || !ocr?.text || ocr.inputKey !== ocrInputKey(page)) return
+    wx.setClipboardData({ data: ocr.text, fail: () => notify('复制失败，请重试。') })
+  },
+
   startCloud(event) {
     const operation: unknown = event.currentTarget.dataset.operation
     const page = this.current()
@@ -1129,7 +1245,6 @@ Page<ScannerData, ScannerActions>({
     this.closed = true
     this.stopPageDrag()
     this.finishButtonSwap(false)
-    for (const path of this.generatedImages) removeFile(path)
-    this.generatedImages.clear()
+    this.releaseUnusedImages()
   },
 })

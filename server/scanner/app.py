@@ -19,7 +19,7 @@ from starlette.datastructures import Headers, UploadFile
 from starlette.formparsers import MultiPartException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from scanner.jobs import Job, JobService, QueueFull, RequestConflict
+from scanner.jobs import OPERATIONS, Job, JobService, QueueFull, RequestConflict
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,7 +208,7 @@ def create_app(
             operation = form.get("operation")
             request_id = form.get("clientRequestId")
             file = form.get("file")
-            if (len(form.multi_items()) != 3 or operation not in ("dewarp", "deshadow")
+            if (len(form.multi_items()) != 3 or operation not in OPERATIONS
                     or not isinstance(request_id, str)
                     or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", request_id)
                     or not isinstance(file, UploadFile)):
@@ -238,6 +238,9 @@ def create_app(
             contents = job.output.read_bytes()
         except FileNotFoundError:
             raise HTTPException(404, "Result not found or expired") from None
+        if job.operation == "ocr":
+            return Response(content=contents, media_type="application/json",
+                            headers={"Cache-Control": "private, no-store"})
         return Response(content=contents, media_type="image/jpeg",
                         headers={"Cache-Control": "private, no-store",
                                  "Content-Disposition": "attachment; filename=enhanced.jpg"})

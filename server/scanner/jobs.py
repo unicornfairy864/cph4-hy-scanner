@@ -6,19 +6,22 @@ import logging
 import os
 from pathlib import Path
 import shutil
+import signal
 import sys
 from time import monotonic
 from typing import Literal
 from uuid import uuid4
 
 
-Operation = Literal["dewarp", "deshadow"]
+Operation = Literal["dewarp", "deshadow", "ocr"]
+OPERATIONS = ("dewarp", "deshadow", "ocr")
 Status = Literal["queued", "running", "succeeded", "failed"]
 LOGGER = logging.getLogger(__name__)
 
 ERRORS = {
     "unsupported_page": "This page does not have enough clear text lines for dewarping.",
     "invalid_image": "The uploaded JPEG could not be decoded.",
+    "ocr_unavailable": "Install Tesseract and its Simplified Chinese and English language data.",
     "processing_error": "Enhancement could not be completed.",
     "processing_timeout": "Enhancement timed out.",
     "queue_timeout": "The queued task expired before processing.",
@@ -52,7 +55,7 @@ class Job:
 
     @property
     def output(self) -> Path:
-        return self.directory / "result.jpg"
+        return self.directory / ("result.json" if self.operation == "ocr" else "result.jpg")
 
     def as_dict(self) -> dict:
         data = {"jobId": self.id, "status": self.status}
@@ -163,9 +166,9 @@ class JobService:
         self._remove_files(job)
 
     def _kill_process(self) -> None:
-        if self.process and self.process.returncode is None:
+        if self.process:
             try:
-                self.process.kill()
+                os.killpg(self.process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
 
@@ -230,15 +233,15 @@ class JobService:
     async def _process(self, job: Job) -> None:
         # Only pass runtime settings the image processor needs. It never inherits
         # WeChat credentials or the token signing key from the API.
-        environment = {key: os.environ[key] for key in ("PATH", "PYTHONPATH", "LANG")
+        environment = {key: os.environ[key] for key in ("PATH", "PYTHONPATH", "LANG", "TESSDATA_PREFIX")
                        if key in os.environ}
         environment.update(OPENBLAS_NUM_THREADS="1", OMP_NUM_THREADS="1", MKL_NUM_THREADS="1",
                            PYTHONDONTWRITEBYTECODE="1")
         self.process = await asyncio.create_subprocess_exec(
             sys.executable, "-m", "scanner.worker", job.operation, str(job.source),
-            str(job.output), str(self.max_pixels),
+            str(job.output), str(self.max_pixels), "--byte-limit", str(self.max_bytes),
             stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL, env=environment,
+            stderr=asyncio.subprocess.DEVNULL, env=environment, start_new_session=True,
         )
         if job.cancelled:
             self._kill_process()
@@ -256,5 +259,6 @@ class JobService:
         if code == 0 and job.output.is_file() and job.output.stat().st_size <= self.max_bytes:
             self._finish(job)
         else:
-            errors = {2: "unsupported_page", 3: "invalid_image"}
+            self._kill_process()
+            errors = {2: "unsupported_page", 3: "invalid_image", 4: "ocr_unavailable"}
             self._finish(job, errors.get(code, "processing_error"))

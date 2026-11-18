@@ -1,9 +1,12 @@
 import asyncio
 from io import BytesIO
+import os
 from pathlib import Path
+import sys
 from tempfile import TemporaryDirectory
 import time
 import unittest
+from unittest.mock import patch
 
 from fastapi import HTTPException
 import httpx
@@ -13,6 +16,7 @@ from PIL import Image, ImageDraw, ImageFont
 from scanner.app import Settings, WeChatExchange, create_app
 from scanner.imaging import flatten_page, remove_shadow
 from scanner.jobs import JobService, QueueFull
+from scanner.ocr import TSV_HEADER
 
 
 def sample_page() -> Image.Image:
@@ -183,6 +187,94 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(self.settings.task_ttl + 0.1)
         self.assertEqual((await self.client.get(path, headers=token)).status_code, 404)
         self.assertFalse((self.settings.data_dir / "jobs" / job_id).exists())
+
+    def use_fake_tesseract(self, body: str, languages: tuple[str, ...] = ("chi_sim", "eng")):
+        executable = self.settings.data_dir / "tesseract"
+        language_output = "\n".join(languages)
+        executable.write_text(
+            f"#!{sys.executable}\n"
+            "import os, sys\n"
+            "if sys.argv[1:] == ['--list-langs']:\n"
+            f"    print({language_output!r})\n"
+            "    raise SystemExit(0)\n"
+            "assert sys.argv[2:] == ['stdout', '-l', 'chi_sim+eng', '--psm', '3', 'tsv']\n"
+            "assert os.environ['OMP_THREAD_LIMIT'] == os.environ['OMP_NUM_THREADS'] == '1'\n"
+            + body,
+            encoding="utf-8",
+        )
+        executable.chmod(0o700)
+        return patch.dict(os.environ, {"PATH": f"{executable.parent}{os.pathsep}{os.environ.get('PATH', '')}"})
+
+    async def test_ocr_result_is_private_and_cleans_up_source_and_result(self):
+        header = "\t".join(TSV_HEADER)
+        row = "5\t1\t1\t1\t1\t1\t20\t30\t90\t25\t99\t扫描"
+        with self.use_fake_tesseract(f"print({header!r})\nprint({row!r})\n"):
+            alice = await self.headers()
+            bob = await self.headers("bob")
+            submit = await self.submit(alice, operation="ocr")
+            self.assertEqual(submit.status_code, 202, submit.text)
+            job_id = submit.json()["jobId"]
+            path = f"/v1/jobs/{job_id}"
+            result_path = path + "/result"
+            self.assertEqual((await self.submit(alice, operation="ocr")).json()["jobId"], job_id)
+            self.assertEqual((await self.client.get(result_path)).status_code, 401)
+            self.assertEqual((await self.client.get(result_path, headers=bob)).status_code, 404)
+            self.assertEqual((await self.client.delete(path, headers=bob)).status_code, 404)
+            self.assertEqual((await self.wait_for_job(alice, path)).json()["status"], "succeeded")
+            result = await self.client.get(result_path, headers=alice)
+            self.assertEqual(result.status_code, 200)
+            self.assertEqual(result.headers["content-type"], "application/json")
+            self.assertEqual(result.headers["cache-control"], "private, no-store")
+            self.assertEqual(result.json(), {
+                "text": "扫描", "width": 660, "height": 800,
+                "lines": [{"text": "扫描", "box": [20, 30, 90, 25]}],
+            })
+            directory = self.settings.data_dir / "jobs" / job_id
+            self.assertEqual([file.name for file in directory.iterdir()], ["result.json"])
+            self.assertEqual((await self.client.delete(path, headers=alice)).status_code, 204)
+            self.assertFalse(directory.exists())
+
+    async def test_ocr_missing_language_does_not_disable_jpeg_jobs(self):
+        token = await self.headers()
+        with self.use_fake_tesseract("raise SystemExit(1)\n", languages=("eng",)):
+            submit = await self.submit(token, operation="ocr")
+            self.assertEqual(submit.status_code, 202, submit.text)
+            job_id = submit.json()["jobId"]
+            path = f"/v1/jobs/{job_id}"
+            self.assertEqual((await self.wait_for_job(token, path)).json()["error"]["code"],
+                             "ocr_unavailable")
+            self.assertEqual((await self.client.get(path + "/result", headers=token)).status_code, 409)
+            self.assertEqual(list((self.settings.data_dir / "jobs" / job_id).iterdir()), [])
+            enhancement = await self.submit(token, operation="deshadow", request_id="jpeg")
+            path = "/v1/jobs/" + enhancement.json()["jobId"]
+            self.assertEqual((await self.wait_for_job(token, path)).json()["status"], "succeeded")
+
+    async def test_ocr_cancellation_also_stops_descendants(self):
+        token = await self.headers()
+        started = self.settings.data_dir / "ocr-started"
+        escaped = self.settings.data_dir / "ocr-escaped"
+        child_source = f"from pathlib import Path; import time; time.sleep(0.9); Path({str(escaped)!r}).touch()"
+        body = (
+            "from pathlib import Path\n"
+            "import subprocess\n"
+            f"process = subprocess.Popen([sys.executable, '-c', {child_source!r}])\n"
+            f"Path({str(started)!r}).touch()\n"
+            "process.wait()\n"
+        )
+        with self.use_fake_tesseract(body):
+            submit = await self.submit(token, operation="ocr")
+            self.assertEqual(submit.status_code, 202, submit.text)
+            job_id = submit.json()["jobId"]
+            path = f"/v1/jobs/{job_id}"
+            deadline = time.monotonic() + 5
+            while not started.exists() and time.monotonic() < deadline:
+                await asyncio.sleep(0.02)
+            self.assertTrue(started.exists())
+            self.assertEqual((await self.client.delete(path, headers=token)).status_code, 204)
+            self.assertEqual((await self.client.get(path, headers=token)).status_code, 404)
+            await asyncio.sleep(1.05)
+            self.assertFalse(escaped.exists())
+            self.assertFalse((self.settings.data_dir / "jobs" / job_id).exists())
 
     async def test_wechat_exchange_sends_expected_fields(self):
         def respond(request: httpx.Request) -> httpx.Response:
