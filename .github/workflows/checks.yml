@@ -40,5 +40,11 @@ jobs:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: server/requirements.txt
+      - name: Install Tesseract and bilingual test fonts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng tesseract-ocr-chi-sim fonts-noto-cjk
       - run: python -m pip install -r requirements.txt
       - run: python -m unittest discover -s tests -v
+        env:
+          SCANNER_REQUIRE_OCR_TESTS: '1'

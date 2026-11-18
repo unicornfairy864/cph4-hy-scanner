@@ -223,6 +223,9 @@ button.organizer-button.secondary { background: #e2ebe3; }
 .organizer-symbol { font-size: 30rpx; line-height: 1; }
 .options { margin: 16rpx 0; }
 .active-cloud { margin-top: 8rpx; }
+.ocr-description { margin-top: 10rpx; }
+.ocr-result { margin-top: 18rpx; }
+.ocr-text { background: #eef4ef; border-radius: 16rpx; display: block; font-size: 28rpx; line-height: 1.55; padding: 18rpx; white-space: pre-wrap; word-break: break-word; }
 .setting { display: flex; align-items: center; justify-content: space-between; font-size: 28rpx; min-height: 76rpx; }
 .setting switch { transform: scale(0.8); transform-origin: right center; }
 .full-width { margin-top: 14rpx; width: 100%; }

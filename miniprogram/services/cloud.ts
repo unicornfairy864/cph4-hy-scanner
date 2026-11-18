@@ -3,17 +3,34 @@ declare const SCANNER_API_BASE_URL: string;
 export type CloudOperation = 'dewarp' | 'deshadow';
 export type CloudStatus = 'queued' | 'running' | 'succeeded' | 'failed';
 
+export interface OcrLine {
+  text: string;
+  box: [number, number, number, number];
+}
+
+export interface OcrResult {
+  text: string;
+  width: number;
+  height: number;
+  lines: OcrLine[];
+}
+
+type JobOperation = CloudOperation | 'ocr';
+
 interface CloudJob {
   jobId: string;
   status: CloudStatus;
   errorCode?: string;
 }
 
-interface EnhancementOptions {
+interface CloudTaskOptions {
   imagePath: string;
-  operation: CloudOperation;
   onStatus?(status: CloudStatus): void;
   isCancelled?(): boolean;
+}
+
+interface EnhancementOptions extends CloudTaskOptions {
+  operation: CloudOperation;
 }
 
 interface Session {
@@ -146,13 +163,13 @@ function jobFromResponse(raw: unknown): CloudJob {
   return { jobId, status, errorCode: typeof errorCode === 'string' ? errorCode : undefined };
 }
 
-function upload(options: EnhancementOptions, clientRequestId: string, token: string): Promise<CloudJob> {
+function upload(imagePath: string, operation: JobOperation, clientRequestId: string, token: string): Promise<CloudJob> {
   return new Promise((resolve, reject) => {
     wx.uploadFile({
       url: apiBaseUrl + '/v1/jobs',
-      filePath: options.imagePath,
+      filePath: imagePath,
       name: 'file',
-      formData: { operation: options.operation, clientRequestId },
+      formData: { operation, clientRequestId },
       header: { Authorization: 'Bearer ' + token },
       timeout: UPLOAD_TIMEOUT,
       success: ({ statusCode, data }) => {
@@ -196,13 +213,41 @@ function download(path: string, token: string): Promise<string> {
 function failureMessage(code: string | undefined): string {
   return ({
     unsupported_page: '这页缺少可用于弯曲矫正的清晰文字行',
+    ocr_unavailable: '云端文字识别暂不可用，请稍后重试',
     invalid_image: '云端无法读取这张图片',
     processing_timeout: '云端处理超时，请稍后重试',
     queue_timeout: '云端排队超时，请稍后重试',
   } as Record<string, string>)[code ?? ''] ?? '云端处理失败，请稍后重试';
 }
 
-export async function runCloudEnhancement(options: EnhancementOptions): Promise<{ imagePath: string }> {
+function ocrResultFromResponse(raw: unknown): OcrResult {
+  const { text, width, height, lines } = responseObject(raw);
+  if (typeof text !== 'string' || typeof width !== 'number' || !Number.isSafeInteger(width) || width < 1
+      || typeof height !== 'number' || !Number.isSafeInteger(height) || height < 1 || !Array.isArray(lines)) {
+    throw new Error('无法读取云端文字识别结果');
+  }
+  return {
+    text, width, height, lines: lines.map((line): OcrLine => {
+      const { text, box } = responseObject(line);
+      if (typeof text !== 'string' || !Array.isArray(box) || box.length !== 4
+          || !box.every((coordinate) => Number.isSafeInteger(coordinate))) {
+        throw new Error('无法读取云端文字识别结果');
+      }
+      const [x, y, lineWidth, lineHeight] = box;
+      if (x < 0 || y < 0 || lineWidth < 1 || lineHeight < 1 || x + lineWidth > width || y + lineHeight > height) {
+        throw new Error('无法读取云端文字识别结果');
+      }
+      return { text, box: [x, y, lineWidth, lineHeight] };
+    }),
+  };
+}
+
+async function runCloudJob<T>(
+  options: CloudTaskOptions,
+  operation: JobOperation,
+  readResult: (jobPath: string, token: string) => Promise<T>,
+  disposeResult?: (result: T) => void,
+): Promise<T> {
   if (!cloudEnabled) throw new Error('云端处理尚未配置');
   const deadline = Date.now() + TASK_TIMEOUT;
   const requestId = `${Date.now().toString(36)}-${(requestSequence++).toString(36)}-${Math.random().toString(36).slice(2)}`;
@@ -212,18 +257,26 @@ export async function runCloudEnhancement(options: EnhancementOptions): Promise<
     if (Date.now() >= deadline) throw new Error('等待云端处理超时，请稍后重试');
   }
 
+  function activeRequest<ResponseData>(action: (token: string) => Promise<ResponseData>): Promise<ResponseData> {
+    checkActive();
+    return authorized((token) => {
+      checkActive();
+      return action(token);
+    });
+  }
+
   let path: string | undefined;
   try {
     checkActive();
-    const submit = (token: string) => upload(options, requestId, token);
+    const submit = (token: string) => upload(options.imagePath, operation, requestId, token);
     let job: CloudJob;
     try {
-      job = await authorized(submit);
+      job = await activeRequest(submit);
     } catch (error) {
       if (!(error instanceof NetworkError)) throw error;
       checkActive();
       // A response may have been lost after the server accepted the image.
-      job = await authorized(submit);
+      job = await activeRequest(submit);
     }
     path = '/v1/jobs/' + job.jobId;
     const jobPath = path;
@@ -232,21 +285,36 @@ export async function runCloudEnhancement(options: EnhancementOptions): Promise<
       options.onStatus?.(job.status);
       if (job.status === 'failed') throw new Error(failureMessage(job.errorCode));
       if (job.status === 'succeeded') {
-        const imagePath = await authorized((token) => download(jobPath, token));
+        const result = await activeRequest((token) => readResult(jobPath, token));
         try {
           checkActive();
-          return { imagePath };
+          return result;
         } catch (error) {
-          removeTemporaryFile(imagePath);
+          disposeResult?.(result);
           throw error;
         }
       }
       await new Promise<void>((resolve) => setTimeout(resolve, POLL_INTERVAL));
       checkActive();
-      job = jobFromResponse(await authorized((token) => request(jobPath, 'GET', token)));
+      const response = await activeRequest((token) => request(jobPath, 'GET', token));
+      checkActive();
+      job = jobFromResponse(response);
     }
+  } catch (error) {
+    checkActive();
+    throw error;
   } finally {
     // Expiry also clears the server when the connection is unavailable.
     if (path && session) void request(path, 'DELETE', session.token).catch(() => undefined);
   }
+}
+
+export async function runCloudEnhancement(options: EnhancementOptions): Promise<{ imagePath: string }> {
+  return { imagePath: await runCloudJob(options, options.operation, download, removeTemporaryFile) };
+}
+
+export function runCloudOcr(options: CloudTaskOptions): Promise<OcrResult> {
+  return runCloudJob(options, 'ocr', async (path, token) => (
+    ocrResultFromResponse(await request(path + '/result', 'GET', token))
+  ));
 }

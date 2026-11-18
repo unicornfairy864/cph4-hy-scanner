@@ -97,6 +97,18 @@
         </view>
 
         <view class="panel">
+          <view class="heading">文字识别</view>
+          <view class="support ocr-description" wx:if="{{cloudEnabled}}">{{hasEnhanced ? '使用已采用的服务器增强图。' : '按当前裁切与方向准备识别图片。'}}</view>
+          <view class="support ocr-description" wx:else>尚未配置 VPS 文字识别服务。</view>
+          <button class="secondary full-width" bindtap="startOcr" disabled="{{!cloudEnabled || !!busy || dragId >= 0 || swapFrom >= 0}}">识别第 {{selected + 1}} 页</button>
+          <view class="support ocr-description" wx:if="{{ocrMessage}}" aria-role="status">{{ocrMessage}}</view>
+          <view class="ocr-result" wx:if="{{ocrText}}">
+            <text class="ocr-text" user-select="{{true}}">{{ocrText}}</text>
+            <button class="primary full-width" bindtap="copyOcr">复制文字</button>
+          </view>
+        </view>
+
+        <view class="panel">
           <view class="heading">文档增强</view>
           <view wx:if="{{hasEnhanced}}" class="support active-cloud">已采用服务器增强。更改设置会重新处理原图。</view>
           <view class="button-row options" aria-label="图像色彩">
@@ -133,6 +145,7 @@
 
   <view wx:if="{{busy}}" class="status" aria-role="status">
     <view class="status-message"><view class="status-dot" />{{busy}}</view>
-    <button wx:if="{{cloudRunning}}" class="status-cancel" bindtap="cancelCloud">取消</button>
+    <button wx:if="{{ocrRunning}}" class="status-cancel" bindtap="cancelOcr">取消</button>
+    <button wx:elif="{{cloudRunning}}" class="status-cancel" bindtap="cancelCloud">取消</button>
   </view>
 </view>
