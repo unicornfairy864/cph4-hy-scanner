@@ -76,7 +76,7 @@ interface ScannerActions {
   previewTurn: number
   drag?: Drag
   closed: boolean
-  cloudCancelled: boolean
+  cloudTurn: number
   lastPdf?: string
   takePhoto(): void
   importAlbum(): void
@@ -199,7 +199,7 @@ Page<ScannerData, ScannerActions>({
   selectedPage: 0,
   previewTurn: 0,
   closed: false,
-  cloudCancelled: false,
+  cloudTurn: 0,
 
   onLoad() {
     this.scans = []
@@ -576,10 +576,10 @@ Page<ScannerData, ScannerActions>({
 
   async enhanceCloud(page, operation) {
     const revision = page.revision
-    this.cloudCancelled = false
+    const turn = ++this.cloudTurn
     this.setData({ cloudRunning: true, busy: '正在准备当前页', candidate: '' })
     let input: string | undefined
-    const cancelled = () => this.closed || this.cloudCancelled || this.current() !== page || page.revision !== revision
+    const cancelled = () => this.closed || turn !== this.cloudTurn || this.current() !== page || page.revision !== revision
     try {
       const result = await renderPage({
         ...renderOptions(page), mode: 'color', enhance: false, denoise: false,
@@ -604,14 +604,14 @@ Page<ScannerData, ScannerActions>({
       if (!cancelled()) notify(errorText(error, '云端增强失败，你可以继续使用本地扫描。'))
     } finally {
       cleanImage(input)
-      if (!this.closed) this.setData({ cloudRunning: false, busy: '' })
+      if (!this.closed && turn === this.cloudTurn) this.setData({ cloudRunning: false, busy: '' })
     }
   },
 
   cancelCloud() {
     if (this.data.cloudRunning) {
-      this.cloudCancelled = true
-      this.setData({ busy: '正在取消增强', cloudRunning: false })
+      this.cloudTurn += 1
+      this.setData({ busy: '', cloudRunning: false })
     }
   },
 
@@ -629,7 +629,6 @@ Page<ScannerData, ScannerActions>({
 
   onUnload() {
     this.closed = true
-    this.cloudCancelled = true
     for (const page of this.scans) {
       cleanImage(page.source)
       cleanImage(page.preview)

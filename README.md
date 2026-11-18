@@ -1,6 +1,6 @@
 # cph4-hy-scanner
 
-微信文档扫描小程序。拍摄、裁切、基础增强和多页 PDF 导出在手机上完成。用户可以对选定的单页使用自托管 VPS 做弯曲矫正或强阴影处理。
+微信文档扫描小程序。拍摄、裁切、基础增强和多页 PDF 导出在手机上完成。配置 VPS 后，用户可以对选定的单页启用弯曲矫正或强阴影处理。
 
 ## 项目结构
 
@@ -17,7 +17,7 @@ npm test
 npm run build
 ```
 
-构建产物在 `dist/miniprogram/`。手机预览由 GitHub Actions 生成，所需配置见[微信预览说明](docs/wechat-preview.md)。服务端运行和配置见[服务端说明](server/README.md)。
+构建产物在 `dist/miniprogram/`。手机预览由 GitHub Actions 生成，所需配置见[微信预览说明](docs/wechat-preview.md)。服务端运行和配置见[服务端说明](server/README.md)。真机检查见[首版验收表](docs/p0-acceptance.md)。
 
 ## 交付顺序
 

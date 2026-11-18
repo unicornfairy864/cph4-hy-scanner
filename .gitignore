@@ -8,6 +8,8 @@ __pycache__/
 .pytest_cache/
 .venv/
 *.pyc
+/data/
+/server/data/
 
 project.private.config.json
 .env
