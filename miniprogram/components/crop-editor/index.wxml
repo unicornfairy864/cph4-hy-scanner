@@ -1,23 +1,28 @@
 <view class="crop-panel">
   <view class="heading">调整裁切</view>
   <view class="support">
-    {{partialDetected ? '已对齐部分页边，请核对裁切范围。' : autoDetected ? '请核对识别出的页边。' : ''}}拖动圆点改四角，拖动短条移整边。
+    {{hasUncertainCorners ? '已对齐部分页边，请核对裁切范围。' : ''}}拖动圆点改四角，拖动短条移整边。
   </view>
-  <view class="crop-stage">
-    <view class="crop-image" style="width:{{width}}px;height:{{height}}px">
-      <image class="crop-photo" src="{{source}}" mode="scaleToFill" />
+  <view class="crop-stage" style="height:{{stageHeight}}px" catchtouchstart="startPan"
+    catchtouchmove="moveGesture" catchtouchend="endGesture" catchtouchcancel="stopGesture">
+    <view class="crop-image" style="{{canvasStyle}}">
+      <image class="crop-photo" src="{{source}}" mode="scaleToFill" style="{{imageStyle}}" />
       <view wx:for="{{lines}}" wx:key="*this" class="crop-line" style="{{item}}" />
       <block wx:for="{{handles}}" wx:key="index">
         <view class="handle edge-handle {{active === 'edge-' + item.index ? 'handle-active' : ''}}" style="{{item.edge}}"
-          data-index="{{item.index}}" data-kind="edge" catchtouchstart="startDrag" catchtouchmove="drag" catchtouchend="endDrag" catchtouchcancel="endDrag">
+          data-index="{{item.index}}" data-kind="edge" catchtouchstart="startHandle" catchtouchmove="moveGesture" catchtouchend="endGesture" catchtouchcancel="stopGesture">
           <view class="edge-pill" />
         </view>
-        <view class="handle corner-handle {{partialDetected && cornerConfidences[item.index] < 0.52 ? 'corner-handle-low' : ''}} {{active === 'corner-' + item.index ? 'handle-active' : ''}}" style="{{item.corner}}"
-          data-index="{{item.index}}" data-kind="corner" catchtouchstart="startDrag" catchtouchmove="drag" catchtouchend="endDrag" catchtouchcancel="endDrag">
+        <view class="handle corner-handle {{item.lowConfidence ? 'corner-handle-low' : ''}} {{active === 'corner-' + item.index ? 'handle-active' : ''}}" style="{{item.corner}}"
+          data-index="{{item.index}}" data-kind="corner" catchtouchstart="startHandle" catchtouchmove="moveGesture" catchtouchend="endGesture" catchtouchcancel="stopGesture">
           <view class="corner-dot" />
         </view>
       </block>
     </view>
+  </view>
+  <view class="zoom-controls">
+    <button class="secondary zoom-button" data-direction="out" bindtap="adjustZoom" disabled="{{zoomOutDisabled}}" aria-label="缩小原图">−</button>
+    <button class="secondary zoom-button" data-direction="in" bindtap="adjustZoom" disabled="{{zoomInDisabled}}" aria-label="放大原图">＋</button>
   </view>
   <view wx:if="{{lens}}" class="lens" style="{{lens.box}}" aria-hidden="true">
     <image class="lens-photo" src="{{source}}" mode="scaleToFill" style="{{lens.image}}" />
@@ -26,6 +31,10 @@
   <view class="actions">
     <button class="secondary" bindtap="cancelCrop">取消</button>
     <button class="secondary" bindtap="resetCrop">整张图片</button>
+    <button class="secondary" bindtap="detectCrop" disabled="{{detecting}}">{{detecting ? '识别中…' : '自动识别'}}</button>
+    <button class="secondary" bindtap="rotateCrop" aria-label="顺时针旋转九十度">旋转</button>
+  </view>
+  <view class="actions apply-row">
     <button class="primary" bindtap="applyCrop">应用裁切</button>
   </view>
 </view>

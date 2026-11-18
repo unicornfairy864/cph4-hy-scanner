@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { Quad } from '../miniprogram/image'
-import { magnifierPosition, moveCorner, moveEdge } from '../miniprogram/components/crop-editor/geometry'
+import type { Quad, Rotation } from '../miniprogram/image'
+import {
+  initialView, magnifierPosition, moveCorner, moveEdge, orientCorners, panView, zoomView,
+} from '../miniprogram/components/crop-editor/geometry'
 import { fullImageCorners, isValidCrop } from '../miniprogram/pages/scan/geometry'
 
 const skewed: Quad = [
@@ -60,4 +62,32 @@ test('magnifier prefers above the finger and switches below when it cannot fit',
   const viewport = { x: 360, y: 700 }
   assert.deepEqual(magnifierPosition({ x: 180, y: 200 }, viewport, 116), { x: 122, y: 62 })
   assert.deepEqual(magnifierPosition({ x: 359, y: 60 }, viewport, 116), { x: 236, y: 82 })
+})
+
+test('rotating the display preserves the source vertex indices and crop coordinates', () => {
+  const rotations: Rotation[] = [0, 90, 180, 270]
+  for (const rotation of rotations) {
+    const oriented = orientCorners(skewed, rotation)
+    assert.ok(isValidCrop(oriented))
+    const source = orientCorners(oriented, ((360 - rotation) % 360) as Rotation)
+    for (let index = 0; index < 4; index += 1) {
+      closeTo(source[index].x, skewed[index].x)
+      closeTo(source[index].y, skewed[index].y)
+    }
+  }
+  const oriented = orientCorners(skewed, 90)
+  const edited = orientCorners(moveCorner(oriented, 0, { x: 0, y: 0.1 }), 270)
+  closeTo(edited[0].x, skewed[0].x + 0.1)
+  closeTo(edited[0].y, skewed[0].y)
+})
+
+test('pinch retains its focus, and pan and zoom are bounded by the image', () => {
+  const frame = { x: 200, y: 300 }
+  const zoom = zoomView(initialView, 2, { x: 30, y: -40 }, { x: 8, y: 2 }, frame)
+  assert.deepEqual(zoom, { zoom: 2, offset: { x: -22, y: 42 } })
+  const panned = panView(zoom, { x: 900, y: -900 }, frame)
+  assert.deepEqual(panned, { zoom: 2, offset: { x: 100, y: -150 } })
+  const centered = zoomView(panned, 0.5, { x: 0, y: 0 }, { x: 0, y: 0 }, frame)
+  assert.deepEqual(centered, initialView)
+  assert.equal(zoomView(initialView, 20, { x: 0, y: 0 }, { x: 0, y: 0 }, frame).zoom, 4)
 })

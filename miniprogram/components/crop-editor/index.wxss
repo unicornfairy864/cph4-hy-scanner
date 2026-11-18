@@ -9,18 +9,16 @@
 .support { color: #586963; font-size: 26rpx; line-height: 1.5; margin-top: 8rpx; }
 
 .crop-stage {
-  align-items: center;
   background: #152b25;
   border-radius: 20rpx;
-  display: flex;
-  justify-content: center;
-  margin: 26rpx -16rpx 24rpx;
-  min-height: 280rpx;
-  padding: 42rpx 0;
+  margin: 26rpx -16rpx 14rpx;
+  overflow: hidden;
+  position: relative;
+  touch-action: none;
 }
 
-.crop-image { flex: 0 0 auto; position: relative; }
-.crop-photo { display: block; height: 100%; width: 100%; }
+.crop-image { left: 50%; position: absolute; top: 50%; }
+.crop-photo { display: block; pointer-events: none; position: absolute; }
 .crop-line {
   background: #57debc;
   box-shadow: 0 1rpx 4rpx #103831;
@@ -76,20 +74,27 @@
   width: 11px;
 }
 
-.actions { display: flex; gap: 14rpx; }
-.actions > button {
+.zoom-controls { display: flex; gap: 12rpx; justify-content: flex-end; margin-bottom: 14rpx; }
+.actions { display: flex; gap: 10rpx; }
+.actions > button,
+.zoom-controls > button {
   border: none;
   border-radius: 18rpx;
   box-sizing: border-box;
-  flex: 1;
   font-size: 26rpx;
   font-weight: 600;
   line-height: 1.25;
   margin: 0;
   min-height: 76rpx;
-  padding: 20rpx 8rpx;
+  padding: 18rpx 6rpx;
+  white-space: nowrap;
 }
 
-.actions > button::after { border: none; }
+.actions > button { flex: 1; min-width: 0; }
+.zoom-controls > .zoom-button { font-size: 32rpx; min-height: 64rpx; padding: 12rpx 0; width: 76rpx; }
+.actions > button::after,
+.zoom-controls > button::after { border: none; }
+button[disabled] { opacity: 0.5; }
+.apply-row { margin-top: 14rpx; }
 .primary { background: #185e53; color: #fff; }
 .secondary { background: #eef4ef; color: #204137; }

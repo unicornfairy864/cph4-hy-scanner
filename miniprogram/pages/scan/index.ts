@@ -86,6 +86,7 @@ interface ScannerData {
   cropOpen: boolean
   cropWidth: number
   cropHeight: number
+  cropRotation: Rotation
   corners: Quad
   modes: typeof modes
   deleteArmed: number
@@ -140,8 +141,7 @@ interface ScannerActions {
   moveSelectedPage(event: WechatMiniprogram.TouchEvent): void
   openCrop(): void
   closeCrop(): void
-  applyCrop(event: { detail: { corners: Quad } }): void
-  rotate(): void
+  applyCrop(event: { detail: { corners: Quad; rotation: Rotation } }): void
   selectMode(event: WechatMiniprogram.TouchEvent): void
   toggleEnhance(event: WechatMiniprogram.SwitchChange): void
   toggleDenoise(event: WechatMiniprogram.SwitchChange): void
@@ -223,7 +223,7 @@ Page<ScannerData, ScannerActions>({
     pages: [], pageCount: 0, selected: 0, source: '', previewLayers: [], previewHeight: 300, controlsMinHeight: 480,
     showOriginal: false, hasEnhanced: false, autoDetected: false, partialDetected: false,
     cornerConfidences: [0, 0, 0, 0], mode: 'color', enhance: true, denoise: true, dewarp: false,
-    cropOpen: false, cropWidth: 0, cropHeight: 0, corners: fullImageCorners, modes,
+    cropOpen: false, cropWidth: 0, cropHeight: 0, cropRotation: 0, corners: fullImageCorners, modes,
     deleteArmed: -1, dragId: -1, dragTarget: -1, thumbScrollLeft: 0, thumbAnchor: '',
     busy: '', needsAlbumAccess: false,
     cloudEnabled, cloudRunning: false, candidate: '',
@@ -476,9 +476,9 @@ Page<ScannerData, ScannerActions>({
     const size = fitImage(page.width, page.height, window.windowWidth, window.windowHeight)
     const corners = copyCorners(page.corners)
     this.setData({
-      cropOpen: true, cropWidth: size.width, cropHeight: size.height, corners,
-      candidate: '', deleteArmed: -1,
-    }, () => this.releaseUnusedImages())
+      cropOpen: true, cropWidth: size.width, cropHeight: size.height, cropRotation: page.rotation,
+      corners, deleteArmed: -1,
+    })
   },
 
   closeCrop() {
@@ -489,29 +489,27 @@ Page<ScannerData, ScannerActions>({
 
   applyCrop(event) {
     const page = this.current()
-    const corners = event.detail.corners
+    const { corners, rotation } = event.detail
     if (!page || !isValidCrop(corners)) {
       notify('请调整四角，使页边保持正确顺序。')
       return
     }
     this.setData({ cropOpen: false })
-    if (corners.some((point, index) => point.x !== page.corners[index].x || point.y !== page.corners[index].y)) {
+    const cropChanged = corners.some((point, index) => point.x !== page.corners[index].x || point.y !== page.corners[index].y)
+    const rotationChanged = rotation !== page.rotation
+    if (cropChanged) {
       page.corners = copyCorners(corners)
       page.cornerConfidences = [1, 1, 1, 1]
       page.autoDetected = true
       this.syncGallery()
+    }
+    if (cropChanged || rotationChanged) {
+      page.rotation = rotation
       this.invalidate(page)
     } else {
       this.paint()
       void this.refreshPreview()
     }
-  },
-
-  rotate() {
-    const page = this.current()
-    if (!page || this.data.busy) return
-    page.rotation = ((page.rotation + 90) % 360) as Rotation
-    this.invalidate(page)
   },
 
   selectMode(event) {

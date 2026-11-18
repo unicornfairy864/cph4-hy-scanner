@@ -1,4 +1,4 @@
-import type { Point, Quad } from '../../image'
+import type { Point, Quad, Rotation } from '../../image'
 import { isValidCrop, pointInImage } from '../../pages/scan/geometry'
 
 function furthestValidCrop(corners: Quad, position: (ratio: number) => Quad): Quad {
@@ -74,4 +74,46 @@ export function magnifierPosition(touch: Point, viewport: Point, size: number): 
     x: Math.max(VIEWPORT_MARGIN, Math.min(viewport.x - size - VIEWPORT_MARGIN, touch.x - size / 2)),
     y: Math.max(VIEWPORT_MARGIN, Math.min(viewport.y - size - VIEWPORT_MARGIN, preferredY)),
   }
+}
+
+export function orientCorners([a, b, c, d]: Quad, rotation: Rotation): Quad {
+  function orient({ x, y }: Point): Point {
+    switch (rotation) {
+      case 90: return { x: 1 - y, y: x }
+      case 180: return { x: 1 - x, y: 1 - y }
+      case 270: return { x: y, y: 1 - x }
+      default: return { x, y }
+    }
+  }
+  return [orient(a), orient(b), orient(c), orient(d)]
+}
+
+export interface CropView {
+  zoom: number
+  offset: Point
+}
+
+export const maximumZoom = 4
+export const initialView: CropView = { zoom: 1, offset: { x: 0, y: 0 } }
+
+function keepInFrame(offset: Point, zoom: number, frame: Point): Point {
+  const maxX = frame.x * (zoom - 1) / 2
+  const maxY = frame.y * (zoom - 1) / 2
+  return { x: Math.max(-maxX, Math.min(maxX, offset.x)), y: Math.max(-maxY, Math.min(maxY, offset.y)) }
+}
+
+export function panView(view: CropView, delta: Point, frame: Point): CropView {
+  const offset = { x: view.offset.x + delta.x, y: view.offset.y + delta.y }
+  return { zoom: view.zoom, offset: keepInFrame(offset, view.zoom, frame) }
+}
+
+export function zoomView(view: CropView, target: number, focus: Point, delta: Point, frame: Point): CropView {
+  const zoom = Math.max(1, Math.min(maximumZoom, target))
+  if (zoom === 1) return initialView
+  const ratio = zoom / view.zoom
+  const offset = {
+    x: focus.x - (focus.x - view.offset.x) * ratio + delta.x,
+    y: focus.y - (focus.y - view.offset.y) * ratio + delta.y,
+  }
+  return { zoom, offset: keepInFrame(offset, zoom, frame) }
 }
