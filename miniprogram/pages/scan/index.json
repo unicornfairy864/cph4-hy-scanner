@@ -1,3 +1,7 @@
 {
-  "navigationBarTitleText": "文档扫描"
+  "navigationBarTitleText": "文档扫描",
+  "disableScroll": true,
+  "usingComponents": {
+    "crop-editor": "/components/crop-editor/index"
+  }
 }

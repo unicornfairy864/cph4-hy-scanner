@@ -1,3 +1,4 @@
+import { flattenBookPage } from './dewarp';
 import type { Frame, Point, Quad, RenderOptions } from './types';
 
 function luminance(red: number, green: number, blue: number): number {
@@ -215,7 +216,8 @@ function enhance(frame: Frame, { mode, enhance: correctLight }: RenderOptions): 
 }
 
 export function renderDocument(source: Frame, options: RenderOptions): Frame {
-  const result = warp(source, options);
+  const cropped = warp(source, options);
+  const result = options.dewarp ? flattenBookPage(cropped) : cropped;
   if (options.denoise) removeIsolatedPixels(result);
   enhance(result, options);
   return result;

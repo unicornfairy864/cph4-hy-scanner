@@ -1,0 +1,31 @@
+<view class="export-page">
+  <view class="export-card" wx:if="{{pageCount}}">
+    <view class="preview-frame">
+      <image class="preview-image" src="{{preview}}" mode="aspectFit" />
+      <button class="preview-arrow preview-prev" data-direction="-1" bindtap="changePage" disabled="{{!!busy || selected === 0}}" aria-label="上一页">‹</button>
+      <button class="preview-arrow preview-next" data-direction="1" bindtap="changePage" disabled="{{!!busy || selected === pageCount - 1}}" aria-label="下一页">›</button>
+      <view class="preview-count">{{selected + 1}} / {{pageCount}}</view>
+    </view>
+    <view class="export-field" wx:if="{{pageCount > 1}}">
+      <view class="field-label">页面范围</view>
+      <view class="choice-row">
+        <button class="choice {{scope === 'all' ? 'choice-active' : ''}}" data-scope="all" bindtap="selectScope" disabled="{{!!busy}}">全部 {{pageCount}} 页</button>
+        <button class="choice {{scope === 'current' ? 'choice-active' : ''}}" data-scope="current" bindtap="selectScope" disabled="{{!!busy}}">第 {{selected + 1}} 页</button>
+      </view>
+    </view>
+    <view class="export-field">
+      <label for="filename" class="field-label">文件名称</label>
+      <input id="filename" type="text" value="{{filename}}" placeholder="扫描文档" maxlength="70" bindinput="setFilename" disabled="{{!!busy}}" />
+    </view>
+    <view class="export-field">
+      <view class="field-label">导出清晰度</view>
+      <view class="choice-row">
+        <button wx:for="{{qualities}}" wx:key="label" class="choice {{quality === index ? 'choice-active' : ''}}"
+          data-index="{{index}}" bindtap="selectQuality" disabled="{{!!busy}}">{{item.label}}</button>
+      </view>
+    </view>
+    <button class="primary" bindtap="savePdf" disabled="{{!!busy}}">{{busy || '生成 PDF'}}</button>
+    <view class="export-note">生成后可在微信文档菜单保存或转发。</view>
+  </view>
+  <view class="export-card export-note" wx:else>请返回扫描页添加图片。</view>
+</view>

@@ -1,0 +1,95 @@
+.crop-panel {
+  background: #fff;
+  border: 1rpx solid #dfe7e1;
+  border-radius: 30rpx;
+  padding: 28rpx;
+}
+
+.heading { font-size: 34rpx; font-weight: 650; line-height: 1.35; }
+.support { color: #586963; font-size: 26rpx; line-height: 1.5; margin-top: 8rpx; }
+
+.crop-stage {
+  align-items: center;
+  background: #152b25;
+  border-radius: 20rpx;
+  display: flex;
+  justify-content: center;
+  margin: 26rpx -16rpx 24rpx;
+  min-height: 280rpx;
+  padding: 42rpx 0;
+}
+
+.crop-image { flex: 0 0 auto; position: relative; }
+.crop-photo { display: block; height: 100%; width: 100%; }
+.crop-line {
+  background: #57debc;
+  box-shadow: 0 1rpx 4rpx #103831;
+  height: 4rpx;
+  pointer-events: none;
+  position: absolute;
+  transform-origin: left center;
+}
+
+.handle {
+  align-items: center;
+  display: flex;
+  justify-content: center;
+  position: absolute;
+}
+
+.edge-handle { height: 68rpx; width: 76rpx; z-index: 1; }
+.corner-handle { height: 76rpx; transform: translate(-50%, -50%); width: 76rpx; z-index: 2; }
+.handle-active { z-index: 3; }
+
+.edge-pill,
+.corner-dot {
+  background: #185e53;
+  border: 4rpx solid #fff;
+  box-shadow: 0 3rpx 8rpx #0007;
+}
+
+.edge-pill { border-radius: 10rpx; height: 12rpx; width: 36rpx; }
+.corner-dot { border-radius: 50%; height: 24rpx; width: 24rpx; }
+.corner-handle-low .corner-dot { border-color: #f9da90; }
+.handle-active > view { background: #1b8a72; }
+
+.lens {
+  background: #152b25;
+  border-radius: 50%;
+  box-shadow: 0 0 0 3px white, 0 3px 15px #0007;
+  overflow: hidden;
+  pointer-events: none;
+  position: fixed;
+  z-index: 10;
+}
+
+.lens-photo { display: block; position: absolute; }
+.lens-target {
+  border: 2px solid #57debc;
+  border-radius: 50%;
+  box-shadow: 0 0 1px 1px #152b25;
+  height: 11px;
+  left: 50%;
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 11px;
+}
+
+.actions { display: flex; gap: 14rpx; }
+.actions > button {
+  border: none;
+  border-radius: 18rpx;
+  box-sizing: border-box;
+  flex: 1;
+  font-size: 26rpx;
+  font-weight: 600;
+  line-height: 1.25;
+  margin: 0;
+  min-height: 76rpx;
+  padding: 20rpx 8rpx;
+}
+
+.actions > button::after { border: none; }
+.primary { background: #185e53; color: #fff; }
+.secondary { background: #eef4ef; color: #204137; }

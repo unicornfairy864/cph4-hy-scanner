@@ -1,4 +1,4 @@
-import type { Detection, Frame, Point, Quad } from './types';
+import type { CornerConfidences, Detection, Frame, Point, Quad } from './types';
 
 function luminance(red: number, green: number, blue: number): number {
   return (77 * red + 150 * green + 29 * blue) >> 8;
@@ -275,9 +275,207 @@ function searchEdges(
   return best;
 }
 
+interface SideLine {
+  offset: number;
+  slope: number;
+  confidence: number;
+  from: number;
+  to: number;
+}
+
+const PROFILE_COUNT = 40;
+
+function sideProfiles(frame: Frame, side: number, span: number, depth: number): Float32Array[] {
+  const horizontal = side % 2 === 0;
+  const reflected = side === 1 || side === 2;
+  const last = (horizontal ? frame.height : frame.width) - 1;
+  return Array.from({ length: PROFILE_COUNT }, (_, index) => {
+    const along = Math.round(span * (0.04 + 0.92 * index / (PROFILE_COUNT - 1)));
+    const luma = new Float32Array(depth + 17);
+    const chroma = new Float32Array(depth + 17);
+    for (let distance = 0; distance < luma.length; distance++) {
+      const across = reflected ? last - distance : distance;
+      for (let step = -2; step <= 2; step++) {
+        const position = Math.max(0, Math.min(span, along + step));
+        const x = horizontal ? position : across;
+        const y = horizontal ? across : position;
+        const pixel = 4 * (y * frame.width + x);
+        const gray = luminance(frame.data[pixel], frame.data[pixel + 1], frame.data[pixel + 2]);
+        luma[distance] += gray / 5;
+        chroma[distance] += (frame.data[pixel + 2] - gray) / 5;
+      }
+    }
+    const contrast = new Float32Array(depth + 1);
+    for (let distance = 1; distance <= depth; distance++) {
+      const near = Math.max(0, distance - 2);
+      const far = Math.max(0, distance - 6);
+      const closeContrast = luma[distance + 2] - luma[near];
+      const innerPaper = Math.max(luma[distance + 6], luma[distance + 10], luma[distance + 13], luma[distance + 16]);
+      const outerPaper = Math.max(luma[far], luma[Math.max(0, distance - 10)],
+        luma[Math.max(0, distance - 13)], luma[Math.max(0, distance - 16)]);
+      const spreadContrast = innerPaper - outerPaper;
+      const chromaContrast = Math.abs(chroma[distance + 6] - chroma[far]);
+      const signedEdge = 0.52 * closeContrast + 0.65 * spreadContrast;
+      const pageContrast = Math.abs(spreadContrast) + 0.5 * chromaContrast;
+      const edge = Math.sign(signedEdge) * (Math.abs(signedEdge) + 0.48 * chromaContrast);
+      // Horizontal glyph strokes have a contrast peak but similar paper beyond the stroke.
+      contrast[distance] = horizontal && pageContrast < 9 ? 0.3 * edge : edge;
+    }
+    return contrast;
+  });
+}
+
+function detectSide(frame: Frame, side: number): SideLine | null {
+  const horizontal = side % 2 === 0;
+  const span = (horizontal ? frame.width : frame.height) - 1;
+  const limit = Math.floor(0.29 * ((horizontal ? frame.height : frame.width) - 1));
+  const profiles = sideProfiles(frame, side, span, limit);
+  const positions = profiles.map((_, index) => span * (0.04 + 0.92 * index / (PROFILE_COUNT - 1)));
+  let result: SideLine | null = null;
+  let bestScore = 0;
+
+  for (let angle = -22; angle <= 22; angle++) {
+    const slope = angle * 0.025;
+    const shifts = positions.map((position) => slope * (position - span / 2));
+    for (let middle = -Math.floor(limit / 2); middle <= limit; middle += 2) {
+      let count = 0;
+      let observable = 0;
+      let weight = 0;
+      let polaritySum = 0;
+      let meanDistance = 0;
+      let first = -1;
+      let last = -1;
+      let runStart = -1;
+      let longestRun = 0;
+
+      for (let index = 0; index < profiles.length; index++) {
+        const distance = Math.round(middle + shifts[index]);
+        if (distance < 1 || distance > limit) continue;
+        const profile = profiles[index];
+        const before = 0.94 * profile[Math.max(0, distance - 1)];
+        const after = 0.94 * profile[Math.min(limit, distance + 1)];
+        let edge = profile[distance];
+        if (Math.abs(before) > Math.abs(edge)) edge = before;
+        if (Math.abs(after) > Math.abs(edge)) edge = after;
+        const minimumContrast = distance <= 3 ? 18 : 11;
+        if (distance > 3 || Math.abs(edge) >= minimumContrast) observable++;
+        if (Math.abs(edge) < minimumContrast) continue;
+        const support = Math.min(1, Math.abs(edge) / 38);
+        weight += support;
+        polaritySum += Math.sign(edge) * support;
+        meanDistance += distance;
+        count++;
+        if (first < 0) first = index;
+        if (last < 0 || index - last > 3) runStart = index;
+        last = index;
+        longestRun = Math.max(longestRun, index - runStart + 1);
+      }
+      if (count < 10 || longestRun < 9) continue;
+      const coherence = Math.abs(polaritySum) / weight;
+      const density = count / observable;
+      if (density < 0.52 || coherence < 0.52) continue;
+      // Prefer a credible exterior edge to a deeper line formed by printed text.
+      const score = (weight + 0.62 * count + 0.18 * longestRun) / profiles.length
+        - 1.55 * meanDistance / (count * limit) - 0.30 * (1 - coherence);
+      if (score <= bestScore) continue;
+      bestScore = score;
+      result = {
+        offset: middle - slope * span / 2,
+        slope,
+        confidence: Math.min(0.98, 0.47 + 0.27 * density + 0.24 * weight / profiles.length),
+        from: positions[first],
+        to: positions[last],
+      };
+    }
+  }
+  return bestScore >= 0.24 && result && result.confidence >= 0.68 ? result : null;
+}
+
+function sideConfidence(line: SideLine | null, along: number, span: number): number {
+  if (!line) return 0.16;
+  const gap = Math.max(line.from - along, along - line.to, 0);
+  return line.confidence * Math.max(0.2, 1 - Math.max(0, gap / span - 0.07) * 3);
+}
+
+function intersectSides(horizontal: SideLine | null, vertical: SideLine | null,
+  index: number, maxX: number, maxY: number): Point & { clipped: boolean } {
+  const top = index < 2;
+  const left = index === 0 || index === 3;
+  const outsideX = left ? 0 : maxX;
+  const outsideY = top ? 0 : maxY;
+  const xSign = left ? 1 : -1;
+  const ySign = top ? 1 : -1;
+  // Move fitted sides slightly outwards to preserve content near rounded page corners.
+  const hOffset = horizontal ? outsideY + ySign * (horizontal.offset - 2) : outsideY;
+  const vOffset = vertical ? outsideX + xSign * (vertical.offset - 2) : outsideX;
+  const hSlope = ySign * (horizontal?.slope ?? 0);
+  const vSlope = xSign * (vertical?.slope ?? 0);
+  let x = (vOffset + vSlope * hOffset) / (1 - hSlope * vSlope);
+  let y = hOffset + hSlope * x;
+  const clipped = x < 0 || x > maxX || y < 0 || y > maxY;
+  if (y < 0 || y > maxY) {
+    y = Math.max(0, Math.min(maxY, y));
+    x = vOffset + vSlope * y;
+  }
+  if (x < 0 || x > maxX) {
+    x = Math.max(0, Math.min(maxX, x));
+    y = Math.max(0, Math.min(maxY, hOffset + hSlope * x));
+  }
+  return { x, y, clipped };
+}
+
+function inferredCorners(frame: Frame): { corners: Quad; cornerConfidences: CornerConfidences } | null {
+  const [top, right, bottom, left] = [0, 1, 2, 3].map((side) => detectSide(frame, side));
+  if ([top, right, bottom, left].filter(Boolean).length < 2) return null;
+
+  const maxX = frame.width - 1;
+  const maxY = frame.height - 1;
+  const horizontal = [top, top, bottom, bottom];
+  const vertical = [left, right, right, left];
+  const frameMargin = Math.max(2, Math.min(maxX, maxY) * 0.018);
+  const corners: Point[] = [];
+  const confidences: number[] = [];
+  for (let index = 0; index < 4; index++) {
+    const h = horizontal[index];
+    const v = vertical[index];
+    const estimated = intersectSides(h, v, index, maxX, maxY);
+    const horizontalConfidence = sideConfidence(h, estimated.x, maxX);
+    const verticalConfidence = sideConfidence(v, estimated.y, maxY);
+    const safeHorizontal = horizontalConfidence >= 0.5 ? h : null;
+    const safeVertical = verticalConfidence >= 0.5 ? v : null;
+    const { x, y } = intersectSides(safeHorizontal, safeVertical, index, maxX, maxY);
+    const confidence = Math.min(horizontalConfidence, verticalConfidence);
+    const frameX = index === 0 || index === 3 ? 0 : maxX;
+    const frameY = index < 2 ? 0 : maxY;
+    if (Math.abs(x - frameX) <= frameMargin && Math.abs(y - frameY) <= frameMargin) {
+      corners.push({ x: frameX, y: frameY });
+      confidences.push(Math.min(0.25, confidence));
+      continue;
+    }
+    confidences.push(estimated.clipped ? Math.min(0.38, confidence) : confidence);
+    corners.push({ x, y });
+  }
+  if (!corners.every((point, index) => cross(point, corners[(index + 1) % 4], corners[(index + 2) % 4]) > 0)) return null;
+  const area = (cross(corners[0], corners[1], corners[2]) + cross(corners[0], corners[2], corners[3])) / 2;
+  if (area < 0.36 * maxX * maxY || area > 0.995 * maxX * maxY) return null;
+  return { corners: corners as Quad, cornerConfidences: confidences as CornerConfidences };
+}
+
+function detection(corners: Quad | null, width: number, height: number, confidence: number,
+  cornerConfidences: CornerConfidences): Detection {
+  const normalized = corners
+    ? corners.map(({ x, y }) => ({ x: x / (width - 1), y: y / (height - 1) })) as Quad
+    : null;
+  return {
+    corners: normalized,
+    confidence,
+    cornerConfidences,
+  };
+}
+
 export function detectDocument(frame: Frame): Detection {
   const { width, height } = frame;
-  if (width < 32 || height < 32) return { corners: null, confidence: 0 };
+  if (width < 32 || height < 32) return detection(null, width, height, 0, [0, 0, 0, 0]);
   const edges = edgeStrength(frame);
   const threshold = edgeThreshold(edges);
   let best = searchEdges(edges, width, height, threshold);
@@ -285,7 +483,13 @@ export function detectDocument(frame: Frame): Detection {
     const lower = searchEdges(edges, width, height, Math.round(threshold * 0.62));
     if (lower.score > best.score) best = lower;
   }
-  if (!best.corners || best.score < 0.65) return { corners: null, confidence: best.score };
-  const corners = best.corners.map(({ x, y }) => ({ x: x / (width - 1), y: y / (height - 1) })) as Quad;
-  return { corners, confidence: best.score };
+  if (best.corners && best.score >= 0.65) {
+    return detection(best.corners, width, height, best.score, [best.score, best.score, best.score, best.score]);
+  }
+  const inferred = inferredCorners(frame);
+  if (inferred) {
+    const confidence = inferred.cornerConfidences.reduce((sum, value) => sum + value, 0) / 4;
+    return detection(inferred.corners, width, height, confidence, inferred.cornerConfidences);
+  }
+  return detection(null, width, height, best.score, [0, 0, 0, 0]);
 }

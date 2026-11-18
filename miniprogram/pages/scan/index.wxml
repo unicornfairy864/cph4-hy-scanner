@@ -1,123 +1,122 @@
 <view class="scanner">
-  <view wx:if="{{cropOpen}}" class="panel crop-panel">
-    <view class="heading">调整四角</view>
-    <view class="support">{{autoDetected ? '核对识别出的页边，拖动四角微调。' : '拖动四角，选择要保留的文档范围。'}}</view>
-    <view class="crop-stage">
-      <view class="crop-image" style="width:{{cropWidth}}px;height:{{cropHeight}}px">
-        <image class="crop-photo" src="{{source}}" mode="scaleToFill" />
-        <view wx:for="{{cornerEdges}}" wx:key="*this" class="crop-edge" style="{{item}}" />
-        <view wx:for="{{handleIndices}}" wx:key="*this" class="crop-handle" style="left:{{corners[item].x * 100}}%;top:{{corners[item].y * 100}}%"
-          data-index="{{item}}" catchtouchstart="dragStart" catchtouchmove="dragMove" catchtouchend="dragEnd" catchtouchcancel="dragEnd">
-          <view class="handle-circle" />
-        </view>
-      </view>
-    </view>
-    <view class="button-row crop-actions">
-      <button class="secondary" bindtap="closeCrop">取消</button>
-      <button class="secondary" bindtap="resetCrop">整张图片</button>
-      <button class="primary" bindtap="applyCrop">确认四角</button>
+  <scroll-view wx:if="{{cropOpen}}" class="crop-host" scroll-y>
+    <crop-editor source="{{source}}" corners="{{corners}}" width="{{cropWidth}}" height="{{cropHeight}}"
+      auto-detected="{{autoDetected}}" partial-detected="{{partialDetected}}" corner-confidences="{{cornerConfidences}}"
+      bindcancel="closeCrop" bindapply="applyCrop" />
+  </scroll-view>
+
+  <view wx:if="{{!pageCount}}" class="welcome panel">
+    <view class="paper-mark" aria-hidden="true"><view class="mark-page"><view /><view /><view /></view></view>
+    <view class="welcome-title">扫描文档</view>
+    <view class="support">拍照或导入图片，校正页面并合成 PDF。</view>
+    <view class="button-row welcome-actions">
+      <button class="primary" bindtap="takePhoto" disabled="{{!!busy}}">拍照扫描</button>
+      <button class="secondary" bindtap="showImportOptions" disabled="{{!!busy}}">导入图片</button>
     </view>
   </view>
 
-  <block wx:else>
-    <view wx:if="{{pageCount === 0}}" class="panel welcome">
-      <view class="paper-mark" aria-hidden="true">
-        <view class="mark-page"><view /><view /><view /></view>
+  <view class="workspace {{cropOpen || !pageCount ? 'workspace-hidden' : ''}}">
+    <view class="fixed-preview">
+      <view class="preview-toolbar">
+        <view class="preview-count">{{selected + 1}} / {{pageCount}}</view>
+        <view class="segment" aria-label="图像预览">
+          <button class="{{showOriginal ? 'segment-active' : ''}}" data-view="original" bindtap="selectPreview" disabled="{{!!busy}}">原图</button>
+          <button class="{{!showOriginal ? 'segment-active' : ''}}" data-view="effect" bindtap="selectPreview" disabled="{{!!busy}}">效果</button>
+        </view>
+        <view class="preview-actions">
+          <button class="icon-button" bindtap="saveJpg" disabled="{{!!busy}}" aria-label="保存 JPG"><text class="save-symbol" aria-hidden="true">↓</text></button>
+          <button class="icon-button next-step" bindtap="openExport" disabled="{{!!busy}}" aria-label="下一步，导出 PDF"><text aria-hidden="true">↗</text></button>
+        </view>
       </view>
-      <view class="welcome-title">扫描文档</view>
-      <view class="support">拍照或导入图片，校正页面并合成 PDF。</view>
-      <view class="button-row welcome-actions">
-        <button class="primary" bindtap="takePhoto" disabled="{{!!busy}}">拍照扫描</button>
-        <button class="secondary" bindtap="importAlbum" disabled="{{!!busy}}">从相册导入</button>
+
+      <view class="image-frame" style="height:{{previewHeight}}px">
+        <image wx:for="{{previewLayers}}" wx:key="path" class="page-image {{item.visible ? 'page-image-visible' : ''}}"
+          src="{{item.path}}" data-path="{{item.path}}" mode="aspectFit" bindload="finishPreviewLoad" binderror="failPreviewLoad" />
+        <button class="image-arrow image-arrow-prev" data-direction="-1" bindtap="changePage"
+          disabled="{{!!busy || selected === 0}}" aria-label="上一页">‹</button>
+        <button class="image-arrow image-arrow-next" data-direction="1" bindtap="changePage"
+          disabled="{{!!busy || selected === pageCount - 1}}" aria-label="下一页">›</button>
       </view>
     </view>
 
-    <block wx:else>
-      <view class="panel page-panel">
-        <view class="panel-top">
-          <view class="heading">第 {{selected + 1}} / {{pageCount}} 页</view>
-          <button class="text-button" bindtap="toggleOriginal" disabled="{{!!busy}}">{{showOriginal ? '查看处理结果' : '查看原图'}}</button>
-        </view>
-        <view class="image-frame">
-          <image class="page-image" src="{{showOriginal ? source : preview}}" mode="aspectFit" />
-        </view>
-        <view wx:if="{{hasEnhanced && !showOriginal}}" class="support enhanced-label">已采用服务器增强结果。修改扫描设置将重新处理原图。</view>
-        <view class="button-row edit-actions">
-          <button class="secondary" bindtap="openCrop" disabled="{{!!busy}}">调整四角</button>
-          <button class="secondary" bindtap="rotate" disabled="{{!!busy}}">顺时针旋转</button>
-          <button class="secondary" bindtap="saveJpg" disabled="{{!!busy}}">保存 JPG</button>
-        </view>
-        <button wx:if="{{needsAlbumAccess}}" class="secondary full-width" open-type="openSetting"
-          bindopensetting="refreshAlbumPermission" disabled="{{!!busy}}">开启相册保存权限</button>
-      </view>
-
-      <view class="panel" wx:if="{{candidate}}">
-        <view class="heading">服务器处理结果</view>
-        <view class="image-frame candidate-frame"><image class="page-image" src="{{candidate}}" mode="aspectFit" /></view>
-        <view class="button-row">
-          <button class="secondary" bindtap="dismissCandidate">舍弃</button>
-          <button class="primary" bindtap="useCandidate">采用此结果</button>
-        </view>
-      </view>
-
-      <view class="panel">
-        <view class="panel-top"><view class="heading">整理页面</view></view>
-        <scroll-view class="thumbnail-strip" scroll-x enhanced show-scrollbar="{{false}}" aria-label="扫描页列表">
-          <view wx:for="{{pages}}" wx:key="id" class="thumbnail {{selected === index ? 'thumbnail-selected' : ''}}"
-            bindtap="selectPage" data-index="{{index}}" aria-role="button" aria-label="第 {{index + 1}} 页">
-            <image src="{{item.imagePath}}" mode="aspectFit" lazy-load />
-            <view class="thumbnail-number">{{index + 1}}</view>
+    <scroll-view class="controls-scroll" scroll-y enhanced show-scrollbar="{{false}}" bindscroll="onControlsScroll">
+      <view class="controls-content" style="min-height:{{controlsMinHeight}}px">
+        <view class="panel organizer">
+          <view class="panel-top">
+            <view class="heading">整理页面</view>
+            <view wx:if="{{pageCount > 1}}" class="support">拖动下方手柄排序</view>
           </view>
-        </scroll-view>
-        <view class="button-row collection-actions">
-          <button class="secondary" bindtap="takePhoto" disabled="{{!!busy}}">拍照</button>
-          <button class="secondary" bindtap="importAlbum" disabled="{{!!busy}}">添加图片</button>
+          <view class="thumbnail-row">
+            <scroll-view class="thumbnail-strip" scroll-x enhanced show-scrollbar="{{false}}" scroll-left="{{thumbScrollLeft}}"
+              scroll-into-view="{{thumbAnchor}}" bindscroll="onThumbnailsScroll" aria-label="扫描页列表">
+              <view class="thumbnail-track">
+                <view wx:for="{{pages}}" wx:key="id" id="scan-page-{{item.id}}" data-index="{{index}}"
+                  class="thumbnail {{selected === index ? 'thumbnail-selected' : ''}} {{dragId === item.id ? 'thumbnail-dragging' : ''}} {{dragTarget === index && dragId !== item.id ? 'thumbnail-target' : ''}}">
+                  <view class="thumbnail-tap" bindtap="selectPage" data-index="{{index}}" aria-role="button" aria-label="第 {{index + 1}} 页">
+                    <view class="thumbnail-photo" style="width:{{item.width}}px;height:{{item.height}}px">
+                      <image src="{{item.source}}" mode="scaleToFill" lazy-load />
+                      <view wx:for="{{item.lines}}" wx:for-item="line" wx:key="id" class="thumbnail-edge" style="{{line.style}}" />
+                    </view>
+                  </view>
+                  <button wx:if="{{selected === index}}" class="page-delete {{deleteArmed === item.id ? 'page-delete-armed' : ''}}"
+                    data-id="{{item.id}}" catchtap="removePage" disabled="{{!!busy || dragId >= 0}}"
+                    aria-label="{{deleteArmed === item.id ? '确认删除当前页' : '删除当前页'}}">{{deleteArmed === item.id ? '删除' : '×'}}</button>
+                  <view class="thumbnail-foot">
+                    <text class="thumbnail-number">{{index + 1}}</text>
+                    <view wx:if="{{pageCount > 1}}" class="drag-handle" data-index="{{index}}" catchtouchstart="startPageDrag"
+                      catchtouchmove="movePageDrag" catchtouchend="endPageDrag" catchtouchcancel="cancelPageDrag" aria-label="拖动调整第 {{index + 1}} 页顺序">⠿</view>
+                  </view>
+                </view>
+              </view>
+            </scroll-view>
+          </view>
+          <view class="button-row organizer-actions">
+            <button class="secondary organizer-button" data-direction="-1" bindtap="moveSelectedPage" disabled="{{!!busy || selected === 0 || dragId >= 0}}"><text class="organizer-symbol" aria-hidden="true">←</text><text>左移</text></button>
+            <button class="secondary organizer-button" data-direction="1" bindtap="moveSelectedPage" disabled="{{!!busy || selected === pageCount - 1 || dragId >= 0}}"><text class="organizer-symbol" aria-hidden="true">→</text><text>右移</text></button>
+            <button class="primary organizer-button" bindtap="showImportOptions" disabled="{{!!busy || dragId >= 0}}"><text class="organizer-symbol" aria-hidden="true">＋</text><text>新增</text></button>
+          </view>
+          <view class="button-row organizer-edits">
+            <button class="secondary" bindtap="openCrop" disabled="{{!!busy}}">调整四角</button>
+            <button class="secondary" bindtap="rotate" disabled="{{!!busy}}">顺时针旋转</button>
+          </view>
+          <button wx:if="{{needsAlbumAccess}}" class="secondary full-width" open-type="openSetting"
+            bindopensetting="refreshAlbumPermission" disabled="{{!!busy}}">开启相册保存权限</button>
         </view>
-        <view class="button-row collection-actions">
-          <button class="secondary" bindtap="movePage" data-offset="-1" disabled="{{!!busy || selected === 0}}">前移</button>
-          <button class="secondary" bindtap="movePage" data-offset="1" disabled="{{!!busy || selected === pageCount - 1}}">后移</button>
-          <button class="secondary danger" bindtap="removePage" disabled="{{!!busy}}">删除此页</button>
-        </view>
-      </view>
 
-      <view class="panel">
-        <view class="heading">文档增强</view>
-        <view class="button-row options" aria-label="图像色彩">
-          <button wx:for="{{modes}}" wx:key="value" class="option {{mode === item.value ? 'option-active' : ''}}"
-            data-mode="{{item.value}}" bindtap="selectMode" disabled="{{!!busy}}">{{item.label}}</button>
-        </view>
-        <view class="setting"><text>均衡光照</text><switch checked="{{enhance}}" disabled="{{!!busy}}" bindchange="toggleEnhance" color="#185e53" /></view>
-        <view class="setting"><text>轻度去噪</text><switch checked="{{denoise}}" disabled="{{!!busy}}" bindchange="toggleDenoise" color="#185e53" /></view>
-        <button wx:if="{{pageCount > 1}}" class="secondary full-width" bindtap="applyEnhancementToAll" disabled="{{!!busy}}">将增强设置应用到全部页</button>
-        <view wx:if="{{cloudEnabled}}" class="cloud-options">
-          <view class="support">服务器增强仅处理当前页。</view>
+        <view class="panel" wx:if="{{candidate}}">
+          <view class="heading">服务器处理结果</view>
+          <view class="candidate-frame"><image src="{{candidate}}" mode="aspectFit" /></view>
           <view class="button-row">
-            <button class="secondary" data-operation="dewarp" bindtap="startCloud" disabled="{{!!busy}}">书页展平</button>
-            <button class="secondary" data-operation="deshadow" bindtap="startCloud" disabled="{{!!busy}}">深阴影处理</button>
+            <button class="secondary" bindtap="dismissCandidate">舍弃</button>
+            <button class="primary" bindtap="useCandidate">采用此结果</button>
+          </view>
+        </view>
+
+        <view class="panel">
+          <view class="heading">文档增强</view>
+          <view wx:if="{{hasEnhanced}}" class="support active-cloud">已采用服务器增强。更改设置会重新处理原图。</view>
+          <view class="button-row options" aria-label="图像色彩">
+            <button wx:for="{{modes}}" wx:key="value" class="option {{mode === item.value ? 'option-active' : ''}}"
+              data-mode="{{item.value}}" bindtap="selectMode" disabled="{{!!busy}}">{{item.label}}</button>
+          </view>
+          <view class="setting"><text>均衡光照</text><switch checked="{{enhance}}" disabled="{{!!busy}}" bindchange="toggleEnhance" color="#185e53" /></view>
+          <view class="setting"><text>轻度去噪</text><switch checked="{{denoise}}" disabled="{{!!busy}}" bindchange="toggleDenoise" color="#185e53" /></view>
+          <view class="setting"><text>书页展平</text><switch checked="{{dewarp}}" disabled="{{!!busy}}" bindchange="toggleDewarp" color="#185e53" /></view>
+          <view wx:if="{{dewarp}}" class="support">适合文字行清晰的弯曲书页。</view>
+          <button wx:if="{{pageCount > 1}}" class="secondary full-width" bindtap="applyEnhancementToAll" disabled="{{!!busy}}">将增强设置应用到全部页</button>
+          <view wx:if="{{cloudEnabled}}" class="cloud-options">
+            <view class="support">服务器增强仅处理当前页。</view>
+            <view class="button-row">
+              <button class="secondary" data-operation="dewarp" bindtap="startCloud" disabled="{{!!busy}}">服务器展平</button>
+              <button class="secondary" data-operation="deshadow" bindtap="startCloud" disabled="{{!!busy}}">深阴影处理</button>
+            </view>
           </view>
         </view>
       </view>
+    </scroll-view>
+  </view>
 
-      <view class="panel export-panel">
-        <view class="heading">导出 PDF</view>
-        <view class="field">
-          <label for="filename">文件名称</label>
-          <input id="filename" type="text" value="{{filename}}" placeholder="扫描文档" maxlength="70" bindinput="setFilename" disabled="{{!!busy}}" />
-        </view>
-        <view class="field">
-          <view>导出清晰度</view>
-          <view class="button-row options quality-options">
-            <button wx:for="{{qualities}}" wx:key="label" class="option {{quality === index ? 'option-active' : ''}}"
-              data-index="{{index}}" bindtap="setQuality" disabled="{{!!busy}}">{{item.label}}</button>
-          </view>
-        </view>
-        <button class="primary export-button" bindtap="savePdf" disabled="{{!!busy}}">合并 {{pageCount}} 页为 PDF</button>
-        <view class="support export-note">生成后在微信中预览，可通过文档菜单保存或转发。</view>
-      </view>
-    </block>
-  </block>
-
-  <view wx:if="{{busy}}" class="status" role="status">
+  <view wx:if="{{busy}}" class="status" aria-role="status">
     <view class="status-message"><view class="status-dot" />{{busy}}</view>
     <button wx:if="{{cloudRunning}}" class="status-cancel" bindtap="cancelCloud">取消</button>
   </view>

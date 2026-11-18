@@ -62,7 +62,7 @@ test('keeps local rendering and JPG export available after Worker creation fails
     const { prepareImage, detectQuad, renderPage } = await import('../miniprogram/image/index');
     const image = await prepareImage({ imagePath: source });
     assert.deepEqual(image, { imagePath: source, width: 80, height: 60 });
-    assert.deepEqual(await detectQuad(image), { corners: null, confidence: 0 });
+    assert.deepEqual(await detectQuad(image), { corners: null, confidence: 0, cornerConfidences: [0, 0, 0, 0] });
     const result = await renderPage({
       imagePath: image.imagePath,
       corners: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }],

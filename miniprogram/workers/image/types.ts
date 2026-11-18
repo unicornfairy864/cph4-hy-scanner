@@ -4,6 +4,7 @@ export interface Point {
 }
 
 export type Quad = [Point, Point, Point, Point];
+export type CornerConfidences = [number, number, number, number];
 export type Rotation = 0 | 90 | 180 | 270;
 export type ImageMode = 'color' | 'grayscale' | 'bw';
 export type ImageQuality = 'preview' | 'export';
@@ -20,12 +21,14 @@ export interface RenderOptions {
   mode: ImageMode;
   denoise: boolean;
   enhance?: boolean;
+  dewarp?: boolean;
   maxDimension: number;
 }
 
 export interface Detection {
   corners: Quad | null;
   confidence: number;
+  cornerConfidences: CornerConfidences;
 }
 
 export type ImageOperation = { type: 'detect' } | { type: 'render'; options: RenderOptions };
