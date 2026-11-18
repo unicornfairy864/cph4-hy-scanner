@@ -13,6 +13,8 @@ const TILE_STRIDE = TILE_CARD_WIDTH + 15
 const TILE_PHOTO_WIDTH = 140
 const TILE_PHOTO_HEIGHT = 158
 const DRAG_HOLD_MS = 300
+const SWAP_DURATION = 150
+const THUMB_PROGRESS_MAX = 1000
 const modes: Array<{ value: ImageMode; label: string }> = [
   { value: 'color', label: '原色' },
   { value: 'grayscale', label: '灰度' },
@@ -63,8 +65,19 @@ interface PageDrag {
   gripX: number
   gripY: number
   target: number
+  originLeft: number
+  originTop: number
   bounds?: { left: number; right: number; width: number }
   timer?: ReturnType<typeof setInterval>
+  settling?: boolean
+  settleTimer?: ReturnType<typeof setTimeout>
+}
+
+interface ButtonSwap {
+  from: number
+  to: number
+  scroll: number
+  timer?: ReturnType<typeof setTimeout>
 }
 
 interface Thumbnail {
@@ -112,12 +125,18 @@ interface ScannerData {
   modes: typeof modes
   deleteArmed: number
   dragId: number
-  dragFrom: number
   dragTarget: number
+  dragTargetShift: number
+  dragSettling: boolean
   dragGhost: DragGhost | null
+  swapFrom: number
+  swapTo: number
+  swapShift: number
   thumbTrackShift: number
   thumbScrollLeft: number
   thumbAnchor: string
+  thumbMaxOffset: number
+  thumbProgress: number
   busy: string
   needsAlbumAccess: boolean
   cloudEnabled: boolean
@@ -133,9 +152,13 @@ interface ScannerActions {
   rpx: number
   previewWidth: number
   actualThumbScroll: number
+  thumbViewportWidth: number
+  thumbScrubbing: boolean
   pagePress?: PagePress
   pagePressTimer?: ReturnType<typeof setTimeout>
   pageDrag?: PageDrag
+  buttonSwap?: ButtonSwap
+  pendingMoves: Array<-1 | 1>
   suppressTapUntil: number
   closed: boolean
   cloudTurn: number
@@ -143,6 +166,7 @@ interface ScannerActions {
   showImportOptions(): void
   addPages(source: ImageSource): Promise<void>
   current(): ScanPage | undefined
+  galleryPages(): Thumbnail[]
   syncGallery(): void
   syncSelection(resetOriginal?: boolean): void
   display(path?: string, style?: string): void
@@ -156,15 +180,22 @@ interface ScannerActions {
   activatePage(index: number, scrollToPage?: boolean): void
   changePage(event: WechatMiniprogram.TouchEvent): void
   onThumbnailsScroll(event: { detail: { scrollLeft: number } }): void
+  beginThumbScrub(): void
+  scrubThumbnails(event: { detail: { value: number } }): void
+  finishThumbScrub(event: { detail: { value: number } }): void
+  endThumbTouch(): void
+  cancelThumbScrub(): void
   rememberPageTouch(event: WechatMiniprogram.TouchEvent): void
   startPageDrag(press: PagePress): void
   updatePageDrag(): void
   movePageDrag(event: WechatMiniprogram.TouchEvent): void
   endPageDrag(event: WechatMiniprogram.TouchEvent): void
   cancelPageDrag(event?: WechatMiniprogram.TouchEvent): void
-  stopPageDrag(): void
-  relocatePage(from: number, to: number): void
+  stopPageDrag(commit?: boolean): void
+  swapPages(from: number, to: number, reset: Partial<ScannerData>, applied?: () => void): void
   moveSelectedPage(event: WechatMiniprogram.TouchEvent): void
+  startButtonSwap(): void
+  finishButtonSwap(continueQueued: boolean): void
   openCrop(): void
   closeCrop(): void
   applyCrop(event: { detail: { corners: Quad; rotation: Rotation } }): void
@@ -186,7 +217,9 @@ interface ScannerActions {
   cancelCloud(): void
   useCandidate(): void
   dismissCandidate(): void
+  syncWorkspaceSize(window: { windowWidth: number; windowHeight: number }): void
   onLoad(): void
+  onResize(event: { size: { windowWidth: number; windowHeight: number } }): void
   onHide(): void
   onUnload(): void
 }
@@ -256,14 +289,19 @@ function hasCurrentPreview(page: ScanPage): boolean {
   return page.previewRevision === page.revision && page.preview?.rotation === previewRenderRotation(page)
 }
 
+function scrollProgress(offset: number, maxOffset: number): number {
+  return maxOffset > 0 ? Math.round(Math.max(0, Math.min(1, offset / maxOffset)) * THUMB_PROGRESS_MAX) : 0
+}
+
 Page<ScannerData, ScannerActions>({
   data: {
     pages: [], pageCount: 0, selected: 0, source: '', previewLayers: [], previewHeight: 0,
     showOriginal: false, hasEnhanced: false, autoDetected: false, partialDetected: false,
     cornerConfidences: [0, 0, 0, 0], mode: 'color', enhance: true, denoise: true, dewarp: false,
     cropOpen: false, cropWidth: 0, cropHeight: 0, cropRotation: 0, corners: fullImageCorners, modes,
-    deleteArmed: -1, dragId: -1, dragFrom: -1, dragTarget: -1, dragGhost: null,
-    thumbTrackShift: 0, thumbScrollLeft: 0, thumbAnchor: '',
+    deleteArmed: -1, dragId: -1, dragTarget: -1, dragTargetShift: 0, dragSettling: false, dragGhost: null,
+    swapFrom: -1, swapTo: -1, swapShift: 0,
+    thumbTrackShift: 0, thumbScrollLeft: 0, thumbAnchor: '', thumbMaxOffset: 0, thumbProgress: 0,
     busy: '', needsAlbumAccess: false,
     cloudEnabled, cloudRunning: false, candidate: '',
   },
@@ -274,6 +312,9 @@ Page<ScannerData, ScannerActions>({
   rpx: 0.5,
   previewWidth: 0,
   actualThumbScroll: 0,
+  thumbViewportWidth: 0,
+  thumbScrubbing: false,
+  pendingMoves: [],
   suppressTapUntil: 0,
   closed: false,
   cloudTurn: 0,
@@ -281,9 +322,14 @@ Page<ScannerData, ScannerActions>({
   onLoad() {
     this.scans = []
     this.generatedImages = new Set()
-    const window = wx.getWindowInfo ? wx.getWindowInfo() : wx.getSystemInfoSync()
+    this.pendingMoves = []
+    this.syncWorkspaceSize(wx.getWindowInfo ? wx.getWindowInfo() : wx.getSystemInfoSync())
+  },
+
+  syncWorkspaceSize(window) {
     this.rpx = window.windowWidth / 750
     this.previewWidth = window.windowWidth - 40 * this.rpx
+    this.thumbViewportWidth = window.windowWidth - 90 * this.rpx
     this.setData({ previewHeight: Math.round(window.windowHeight * 0.4) })
   },
 
@@ -292,7 +338,7 @@ Page<ScannerData, ScannerActions>({
   },
 
   showImportOptions() {
-    if (this.data.busy) return
+    if (this.data.busy || this.pageDrag || this.buttonSwap) return
     const sources: ImageSource[] = ['camera', 'album', 'chat']
     wx.showActionSheet({
       itemList: ['📷 相机拍摄', '🖼 图库导入', '💬 对话导入'],
@@ -304,7 +350,7 @@ Page<ScannerData, ScannerActions>({
   },
 
   async addPages(source) {
-    if (this.data.busy) return
+    if (this.data.busy || this.pageDrag || this.buttonSwap) return
     const openSlots = MAX_PAGES - this.scans.length
     if (openSlots <= 0) {
       notify(`当前文档最多添加 ${MAX_PAGES} 页。`)
@@ -363,9 +409,8 @@ Page<ScannerData, ScannerActions>({
     return this.scans[this.selectedPage]
   },
 
-  syncGallery() {
-    if (this.closed) return
-    const pages: Thumbnail[] = this.scans.map((page) => {
+  galleryPages() {
+    return this.scans.map((page) => {
       const swapSides = page.rotation === 90 || page.rotation === 270
       const imageWidth = swapSides ? page.height : page.width
       const imageHeight = swapSides ? page.width : page.height
@@ -378,7 +423,18 @@ Page<ScannerData, ScannerActions>({
         lines: edgeStyles(orientCorners(page.corners, page.rotation), width, height).map((style, id) => ({ id, style })),
       }
     })
-    this.setData({ pages, pageCount: pages.length })
+  },
+
+  syncGallery() {
+    if (this.closed) return
+    const pages = this.galleryPages()
+    const thumbMaxOffset = Math.max(0, pages.length * TILE_STRIDE * this.rpx - this.thumbViewportWidth)
+    const thumbScrollLeft = Math.min(this.data.thumbScrollLeft, Math.round(thumbMaxOffset))
+    this.actualThumbScroll = Math.min(this.actualThumbScroll, thumbMaxOffset)
+    this.setData({
+      pages, pageCount: pages.length, thumbMaxOffset, thumbScrollLeft,
+      thumbProgress: scrollProgress(this.actualThumbScroll, thumbMaxOffset),
+    })
   },
 
   syncSelection(resetOriginal = false) {
@@ -500,14 +556,14 @@ Page<ScannerData, ScannerActions>({
   },
 
   selectPage(event) {
-    if (this.pageDrag || this.suppressTapUntil > Date.now()) return
+    if (this.pageDrag || this.buttonSwap || this.suppressTapUntil > Date.now()) return
     const index = Number(event.currentTarget.dataset.index)
     if (index === this.selectedPage && this.data.deleteArmed >= 0) this.setData({ deleteArmed: -1 })
     else this.activatePage(index)
   },
 
   activatePage(index, scrollToPage = false) {
-    if (this.data.busy || this.data.cropOpen || this.pageDrag) return
+    if (this.data.busy || this.data.cropOpen || this.pageDrag || this.buttonSwap) return
     if (!this.scans[index] || index === this.selectedPage) return
     this.selectedPage = index
     this.setData({ candidate: '', deleteArmed: -1, thumbAnchor: scrollToPage ? `scan-page-${this.scans[index].id}` : '' }, () => this.releaseUnusedImages())
@@ -523,7 +579,7 @@ Page<ScannerData, ScannerActions>({
 
   openCrop() {
     const page = this.current()
-    if (!page || this.data.busy) return
+    if (!page || this.data.busy || this.pageDrag || this.buttonSwap) return
     const window = wx.getWindowInfo ? wx.getWindowInfo() : wx.getSystemInfoSync()
     const size = fitImage(page.width, page.height, window.windowWidth, window.windowHeight)
     const corners = copyCorners(page.corners)
@@ -566,7 +622,7 @@ Page<ScannerData, ScannerActions>({
 
   rotate() {
     const page = this.current()
-    if (!page || this.data.busy || this.pageDrag) return
+    if (!page || this.data.busy || this.pageDrag || this.buttonSwap) return
     this.rotatePage(page, ((page.rotation + 90) % 360) as Rotation)
   },
 
@@ -582,7 +638,7 @@ Page<ScannerData, ScannerActions>({
 
   restoreCrop() {
     const page = this.current()
-    if (!page || this.data.busy || this.pageDrag) return
+    if (!page || this.data.busy || this.pageDrag || this.buttonSwap) return
     const cropChanged = page.corners.some((point, index) => point.x !== fullImageCorners[index].x || point.y !== fullImageCorners[index].y)
     if (!cropChanged && !page.autoDetected) return
     page.corners = copyCorners(fullImageCorners)
@@ -652,15 +708,49 @@ Page<ScannerData, ScannerActions>({
     if (this.pagePress && !this.pageDrag && Math.abs(this.pagePress.scroll - event.detail.scrollLeft) > 4) {
       this.stopPageDrag()
     }
-    this.actualThumbScroll = event.detail.scrollLeft
-    this.updatePageDrag()
+    this.actualThumbScroll = Math.max(0, Math.min(this.data.thumbMaxOffset, event.detail.scrollLeft))
+    if (this.pageDrag) this.updatePageDrag()
+    else if (!this.thumbScrubbing) {
+      const thumbProgress = scrollProgress(this.actualThumbScroll, this.data.thumbMaxOffset)
+      if (thumbProgress !== this.data.thumbProgress) this.setData({ thumbProgress })
+    }
+  },
+
+  beginThumbScrub() {
+    if (this.pageDrag || !this.data.thumbMaxOffset) return
+    this.stopPageDrag()
+    this.thumbScrubbing = true
+    this.setData({ thumbAnchor: '', thumbScrollLeft: Math.round(this.actualThumbScroll) })
+  },
+
+  scrubThumbnails(event) {
+    if (this.pageDrag || !this.data.thumbMaxOffset || !Number.isFinite(event.detail.value)) return
+    if (!this.thumbScrubbing) this.beginThumbScrub()
+    const thumbProgress = Math.max(0, Math.min(THUMB_PROGRESS_MAX, Math.round(event.detail.value)))
+    const thumbScrollLeft = Math.round(this.data.thumbMaxOffset * thumbProgress / THUMB_PROGRESS_MAX)
+    this.setData({ thumbProgress, thumbScrollLeft })
+  },
+
+  finishThumbScrub(event) {
+    this.scrubThumbnails(event)
+    this.thumbScrubbing = false
+  },
+
+  endThumbTouch() {
+    this.thumbScrubbing = false
+  },
+
+  cancelThumbScrub() {
+    if (!this.thumbScrubbing) return
+    this.thumbScrubbing = false
+    this.setData({ thumbProgress: scrollProgress(this.actualThumbScroll, this.data.thumbMaxOffset) })
   },
 
   rememberPageTouch(event) {
     if (this.pageDrag) return
     this.stopPageDrag()
     this.suppressTapUntil = 0
-    if (event.target?.dataset?.deleteControl || event.touches.length !== 1 || this.data.busy || this.scans.length < 2) return
+    if (event.target?.dataset?.deleteControl || event.touches.length !== 1 || this.data.busy || this.buttonSwap || this.thumbScrubbing || this.scans.length < 2) return
     const touch = event.changedTouches[0]
     const from = Number(event.currentTarget.dataset.index)
     const page = this.scans[from]
@@ -679,23 +769,26 @@ Page<ScannerData, ScannerActions>({
   startPageDrag(press) {
     const { from, currentX: x, currentY: y } = press
     const tile = this.data.pages[from]
-    if (!tile || press.id !== tile.id || this.pageDrag || this.closed || this.data.busy || this.data.cropOpen) {
+    if (!tile || press.id !== tile.id || this.pageDrag || this.buttonSwap || this.closed || this.data.busy || this.data.cropOpen) {
       this.stopPageDrag()
       return
     }
     const drag: PageDrag = {
       press, startScroll: this.actualThumbScroll, scroll: this.actualThumbScroll,
       x, y, gripX: TILE_CARD_WIDTH * this.rpx / 2, gripY: TILE_CARD_HEIGHT * this.rpx / 2, target: from,
+      originLeft: press.x - TILE_CARD_WIDTH * this.rpx / 2, originTop: press.y - TILE_CARD_HEIGHT * this.rpx / 2,
     }
     this.pageDrag = drag
     this.setData({
-      dragId: press.id, dragFrom: from, dragTarget: from, deleteArmed: -1, thumbAnchor: '',
+      dragId: press.id, dragTarget: from, dragTargetShift: 0, deleteArmed: -1, thumbAnchor: '',
       dragGhost: { ...tile, number: from + 1, left: x - drag.gripX, top: y - drag.gripY },
       thumbScrollLeft: Math.round(drag.scroll),
     })
     const query = this.createSelectorQuery()
     query.select(`#scan-page-${press.id}`).boundingClientRect((bounds) => {
       if (this.pageDrag !== drag || !bounds || Array.isArray(bounds)) return
+      drag.originLeft = bounds.left
+      drag.originTop = bounds.top
       drag.gripX = Math.min(bounds.width, Math.max(0, press.x - bounds.left))
       drag.gripY = Math.min(bounds.height, Math.max(0, press.y - bounds.top))
       this.updatePageDrag()
@@ -703,14 +796,16 @@ Page<ScannerData, ScannerActions>({
     query.select('.thumbnail-strip').boundingClientRect((bounds) => {
       if (this.pageDrag !== drag || !bounds || Array.isArray(bounds)) return
       drag.bounds = bounds
+      this.thumbViewportWidth = bounds.width
+      const thumbMaxOffset = Math.max(0, this.scans.length * TILE_STRIDE * this.rpx - bounds.width)
+      this.setData({ thumbMaxOffset, thumbProgress: scrollProgress(drag.scroll, thumbMaxOffset) })
       drag.timer = setInterval(() => {
         const viewport = drag.bounds
         if (!viewport || this.pageDrag !== drag || Math.abs(drag.x - press.x) < 5) return
         const margin = 28
         const step = drag.x > viewport.right - margin ? 15 : drag.x < viewport.left + margin ? -15 : 0
         if (!step) return
-        const max = Math.max(0, this.scans.length * TILE_STRIDE * this.rpx - viewport.width)
-        const next = Math.max(0, Math.min(max, drag.scroll + step))
+        const next = Math.max(0, Math.min(this.data.thumbMaxOffset, drag.scroll + step))
         if (next === drag.scroll) return
         drag.scroll = next
         this.updatePageDrag()
@@ -722,11 +817,18 @@ Page<ScannerData, ScannerActions>({
   updatePageDrag() {
     const drag = this.pageDrag
     if (!drag) return
+    if (drag.settling) {
+      const shift = this.actualThumbScroll - drag.scroll
+      if (shift !== this.data.thumbTrackShift) this.setData({ thumbTrackShift: shift })
+      return
+    }
     const delta = drag.x - drag.press.x + drag.scroll - drag.startScroll
     drag.target = Math.max(0, Math.min(this.scans.length - 1, drag.press.from + Math.round(delta / (TILE_STRIDE * this.rpx))))
     this.setData({
       dragTarget: drag.target,
+      dragTargetShift: (drag.press.from - drag.target) * TILE_STRIDE * this.rpx,
       thumbTrackShift: this.actualThumbScroll - drag.scroll,
+      thumbProgress: scrollProgress(drag.scroll, this.data.thumbMaxOffset),
       'dragGhost.left': drag.x - drag.gripX,
       'dragGhost.top': drag.y - drag.gripY,
     })
@@ -759,23 +861,34 @@ Page<ScannerData, ScannerActions>({
     const touch = event.changedTouches.find((point) => point.identifier === press.touchId)
     if (!touch) return
     const drag = this.pageDrag
-    if (drag) {
-      drag.x = touch.clientX
-      drag.y = touch.clientY
-      this.updatePageDrag()
+    if (!drag) {
+      this.stopPageDrag()
+      return
     }
-    this.stopPageDrag()
-    if (drag && drag.target !== press.from) this.relocatePage(press.from, drag.target)
+    drag.x = touch.clientX
+    drag.y = touch.clientY
+    this.updatePageDrag()
+    this.pagePress = undefined
+    drag.settling = true
+    if (drag.timer !== undefined) clearInterval(drag.timer)
+    const left = drag.originLeft + (drag.target - press.from) * TILE_STRIDE * this.rpx + drag.startScroll - drag.scroll
+    this.setData({ dragSettling: true, 'dragGhost.left': left, 'dragGhost.top': drag.originTop }, () => {
+      if (this.pageDrag !== drag) return
+      drag.settleTimer = setTimeout(() => {
+        if (this.pageDrag === drag) this.stopPageDrag(true)
+      }, SWAP_DURATION)
+    })
   },
 
   cancelPageDrag(event) {
+    if (this.pageDrag?.settling) return
     const press = this.pagePress
     const cancelled = event?.changedTouches
     if (press && cancelled?.length && !cancelled.some((touch) => touch.identifier === press.touchId)) return
     this.stopPageDrag()
   },
 
-  stopPageDrag() {
+  stopPageDrag(commit = false) {
     const drag = this.pageDrag
     this.pagePress = undefined
     if (this.pagePressTimer !== undefined) clearTimeout(this.pagePressTimer)
@@ -784,37 +897,76 @@ Page<ScannerData, ScannerActions>({
     this.pageDrag = undefined
     this.suppressTapUntil = Date.now() + 300
     if (drag.timer !== undefined) clearInterval(drag.timer)
-    if (!this.closed) this.setData({
-      dragId: -1, dragFrom: -1, dragTarget: -1, dragGhost: null,
-      thumbTrackShift: 0, thumbScrollLeft: Math.round(drag.scroll),
-    })
+    if (drag.settleTimer !== undefined) clearTimeout(drag.settleTimer)
+    if (this.closed) return
+    const reset: Partial<ScannerData> = {
+      dragId: -1, dragTarget: -1, dragTargetShift: 0, dragSettling: false, dragGhost: null,
+      thumbTrackShift: 0, thumbScrollLeft: Math.round(drag.scroll), thumbProgress: scrollProgress(drag.scroll, this.data.thumbMaxOffset),
+    }
+    if (commit) this.swapPages(drag.press.from, drag.target, reset)
+    else this.setData(reset)
   },
 
-  relocatePage(from, to) {
+  swapPages(from, to, reset, applied) {
     const selected = this.current()
-    if (!selected || !this.scans[from] || !this.scans[to] || from === to) return
-    const [page] = this.scans.splice(from, 1)
-    this.scans.splice(to, 0, page)
+    const source = this.scans[from]
+    const target = this.scans[to]
+    if (!selected || !source || !target || from === to) {
+      this.setData(reset, applied)
+      return
+    }
+    this.scans[from] = target
+    this.scans[to] = source
     this.selectedPage = this.scans.indexOf(selected)
-    this.syncGallery()
-    this.syncSelection()
+    this.setData({ ...reset, pages: this.galleryPages(), selected: this.selectedPage }, applied)
   },
 
   moveSelectedPage(event) {
     const direction = Number(event.currentTarget.dataset.direction)
     if ((direction !== -1 && direction !== 1) || this.data.busy || this.pageDrag) return
-    const next = this.selectedPage + direction
-    if (!this.scans[next]) return
-    this.relocatePage(this.selectedPage, next)
-    this.setData({ deleteArmed: -1, thumbAnchor: '' }, () => {
+    if (this.pendingMoves.length < MAX_PAGES) this.pendingMoves.push(direction)
+    this.startButtonSwap()
+  },
+
+  startButtonSwap() {
+    if (this.closed || this.buttonSwap) return
+    while (this.pendingMoves.length) {
+      const direction = this.pendingMoves.shift()!
+      const from = this.selectedPage
+      const to = from + direction
+      if (!this.scans[to]) continue
+      this.stopPageDrag()
+      const swap: ButtonSwap = { from, to, scroll: this.actualThumbScroll }
+      this.buttonSwap = swap
+      this.setData({ swapFrom: from, swapTo: to, swapShift: direction * TILE_STRIDE * this.rpx, deleteArmed: -1, thumbAnchor: '' }, () => {
+        if (this.buttonSwap !== swap) return
+        swap.timer = setTimeout(() => {
+          if (this.buttonSwap === swap) this.finishButtonSwap(true)
+        }, SWAP_DURATION)
+      })
+      return
+    }
+  },
+
+  finishButtonSwap(continueQueued) {
+    if (!continueQueued) this.pendingMoves = []
+    const swap = this.buttonSwap
+    if (!swap) return
+    this.buttonSwap = undefined
+    if (swap.timer !== undefined) clearTimeout(swap.timer)
+    if (this.closed) return
+    const anchor = continueQueued && !this.thumbScrubbing && Math.abs(this.actualThumbScroll - swap.scroll) < 1
+    this.swapPages(swap.from, swap.to, { swapFrom: -1, swapTo: -1, swapShift: 0 }, () => {
+      if (!continueQueued || this.closed) return
+      this.startButtonSwap()
       const page = this.current()
-      if (page && !this.closed) this.setData({ thumbAnchor: `scan-page-${page.id}` })
+      if (!this.buttonSwap && page && anchor && !this.thumbScrubbing) this.setData({ thumbAnchor: `scan-page-${page.id}` })
     })
   },
 
   removePage(event) {
     const page = this.current()
-    if (!page || this.data.busy || this.pageDrag || this.suppressTapUntil > Date.now() || Number(event.currentTarget.dataset.id) !== page.id) return
+    if (!page || this.data.busy || this.pageDrag || this.buttonSwap || this.suppressTapUntil > Date.now() || Number(event.currentTarget.dataset.id) !== page.id) return
     if (this.data.deleteArmed !== page.id) {
       this.setData({ deleteArmed: page.id })
       return
@@ -832,7 +984,7 @@ Page<ScannerData, ScannerActions>({
   },
 
   openExport() {
-    if (!this.scans.length || this.data.busy || this.pageDrag) return
+    if (!this.scans.length || this.data.busy || this.pageDrag || this.buttonSwap) return
     const pages = this.scans.map((page) => ({
       ...renderOptions(page), corners: copyCorners(page.corners), enhanced: page.enhanced,
       preview: hasCurrentPreview(page) ? page.preview : undefined,
@@ -857,7 +1009,7 @@ Page<ScannerData, ScannerActions>({
 
   async saveJpg() {
     const page = this.current()
-    if (!page || this.data.busy) return
+    if (!page || this.data.busy || this.pageDrag || this.buttonSwap) return
     this.setData({ busy: '正在保存 JPG' })
     let generated: string | undefined
     try {
@@ -961,13 +1113,23 @@ Page<ScannerData, ScannerActions>({
     this.setData({ candidate: '' }, () => this.releaseUnusedImages())
   },
 
+  onResize({ size }) {
+    this.onHide()
+    this.syncWorkspaceSize(size)
+    this.syncGallery()
+    this.paint()
+  },
+
   onHide() {
-    this.stopPageDrag()
+    this.stopPageDrag(Boolean(this.pageDrag?.settling))
+    this.finishButtonSwap(false)
+    this.cancelThumbScrub()
   },
 
   onUnload() {
     this.closed = true
     this.stopPageDrag()
+    this.finishButtonSwap(false)
     for (const path of this.generatedImages) removeFile(path)
     this.generatedImages.clear()
   },

@@ -161,6 +161,7 @@ button.image-arrow[disabled] { opacity: 0.3; }
 .thumbnail-row { margin-top: 16rpx; }
 .thumbnail-strip { white-space: nowrap; width: 100%; }
 .thumbnail-track { display: inline-flex; padding: 8rpx 0; vertical-align: top; }
+.thumbnail-slider { margin: 0; width: 100%; }
 button.organizer-add { background: #185e53; border-radius: 14rpx; color: #fff; flex: none; font-size: 36rpx; height: 58rpx; line-height: 58rpx; min-height: 58rpx; padding: 0; width: 60rpx; }
 
 .thumbnail {
@@ -173,15 +174,15 @@ button.organizer-add { background: #185e53; border-radius: 14rpx; color: #fff; f
   margin-right: 15rpx;
   position: relative;
   text-align: center;
-  transition: transform 160ms ease-out, opacity 160ms ease-out;
   width: 158rpx;
 }
 
 .thumbnail-selected { border-color: #185e53; }
+.thumbnail-moving { transition: transform 150ms ease-out, opacity 150ms ease-out; }
 .thumbnail-dragging { opacity: 0.14; }
-.thumbnail-target { border-color: #268578; border-style: dashed; }
-.thumbnail-slide-left { transform: translateX(-40%); }
-.thumbnail-slide-right { transform: translateX(40%); }
+.thumbnail-target { border-color: #268578; border-style: dashed; z-index: 2; }
+.thumbnail-swapping { z-index: 1; }
+.thumbnail-swapping.thumbnail-selected { z-index: 2; }
 .thumbnail-ghost {
   border-color: #268578;
   box-shadow: 0 8rpx 22rpx #112b2860;
@@ -193,6 +194,7 @@ button.organizer-add { background: #185e53; border-radius: 14rpx; color: #fff; f
   transition: none;
   z-index: 5;
 }
+.thumbnail-ghost-settling { transition: transform 150ms ease-out; }
 .thumbnail-tap { align-items: center; display: flex; height: 170rpx; justify-content: center; }
 .thumbnail-photo { position: relative; }
 .thumbnail-photo > image { display: block; left: 50%; position: absolute; top: 50%; }
