@@ -1,0 +1,31 @@
+<view class="crop-panel">
+  <view class="heading">调整裁切</view>
+  <view class="support">
+    {{partialDetected ? '已对齐部分页边，请核对裁切范围。' : autoDetected ? '请核对识别出的页边。' : ''}}拖动圆点改四角，拖动短条移整边。
+  </view>
+  <view class="crop-stage">
+    <view class="crop-image" style="width:{{width}}px;height:{{height}}px">
+      <image class="crop-photo" src="{{source}}" mode="scaleToFill" />
+      <view wx:for="{{lines}}" wx:key="*this" class="crop-line" style="{{item}}" />
+      <block wx:for="{{handles}}" wx:key="index">
+        <view class="handle edge-handle {{active === 'edge-' + item.index ? 'handle-active' : ''}}" style="{{item.edge}}"
+          data-index="{{item.index}}" data-kind="edge" catchtouchstart="startDrag" catchtouchmove="drag" catchtouchend="endDrag" catchtouchcancel="endDrag">
+          <view class="edge-pill" />
+        </view>
+        <view class="handle corner-handle {{active === 'corner-' + item.index ? 'handle-active' : ''}}" style="{{item.corner}}"
+          data-index="{{item.index}}" data-kind="corner" catchtouchstart="startDrag" catchtouchmove="drag" catchtouchend="endDrag" catchtouchcancel="endDrag">
+          <view class="corner-dot" />
+        </view>
+      </block>
+    </view>
+  </view>
+  <view wx:if="{{lens}}" class="lens" style="{{lens.box}}" aria-hidden="true">
+    <image class="lens-photo" src="{{source}}" mode="scaleToFill" style="{{lens.image}}" />
+    <view class="lens-target" />
+  </view>
+  <view class="actions">
+    <button class="secondary" bindtap="cancelCrop">取消</button>
+    <button class="secondary" bindtap="resetCrop">整张图片</button>
+    <button class="primary" bindtap="applyCrop">应用裁切</button>
+  </view>
+</view>
