@@ -125,7 +125,6 @@ interface ScannerData {
   modes: typeof modes
   deleteArmed: number
   dragId: number
-  dragFrom: number
   dragTarget: number
   dragTargetShift: number
   dragSettling: boolean
@@ -300,7 +299,7 @@ Page<ScannerData, ScannerActions>({
     showOriginal: false, hasEnhanced: false, autoDetected: false, partialDetected: false,
     cornerConfidences: [0, 0, 0, 0], mode: 'color', enhance: true, denoise: true, dewarp: false,
     cropOpen: false, cropWidth: 0, cropHeight: 0, cropRotation: 0, corners: fullImageCorners, modes,
-    deleteArmed: -1, dragId: -1, dragFrom: -1, dragTarget: -1, dragTargetShift: 0, dragSettling: false, dragGhost: null,
+    deleteArmed: -1, dragId: -1, dragTarget: -1, dragTargetShift: 0, dragSettling: false, dragGhost: null,
     swapFrom: -1, swapTo: -1, swapShift: 0,
     thumbTrackShift: 0, thumbScrollLeft: 0, thumbAnchor: '', thumbMaxOffset: 0, thumbProgress: 0,
     busy: '', needsAlbumAccess: false,
@@ -781,7 +780,7 @@ Page<ScannerData, ScannerActions>({
     }
     this.pageDrag = drag
     this.setData({
-      dragId: press.id, dragFrom: from, dragTarget: from, dragTargetShift: 0, deleteArmed: -1, thumbAnchor: '',
+      dragId: press.id, dragTarget: from, dragTargetShift: 0, deleteArmed: -1, thumbAnchor: '',
       dragGhost: { ...tile, number: from + 1, left: x - drag.gripX, top: y - drag.gripY },
       thumbScrollLeft: Math.round(drag.scroll),
     })
@@ -901,7 +900,7 @@ Page<ScannerData, ScannerActions>({
     if (drag.settleTimer !== undefined) clearTimeout(drag.settleTimer)
     if (this.closed) return
     const reset: Partial<ScannerData> = {
-      dragId: -1, dragFrom: -1, dragTarget: -1, dragTargetShift: 0, dragSettling: false, dragGhost: null,
+      dragId: -1, dragTarget: -1, dragTargetShift: 0, dragSettling: false, dragGhost: null,
       thumbTrackShift: 0, thumbScrollLeft: Math.round(drag.scroll), thumbProgress: scrollProgress(drag.scroll, this.data.thumbMaxOffset),
     }
     if (commit) this.swapPages(drag.press.from, drag.target, reset)
