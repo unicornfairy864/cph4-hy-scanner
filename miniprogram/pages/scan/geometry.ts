@@ -1,4 +1,4 @@
-import type { Point, Quad } from '../../image'
+import type { Point, Quad, Rotation } from '../../image'
 
 export const fullImageCorners: Quad = [
   { x: 0, y: 0 },
@@ -40,4 +40,22 @@ export function edgeStyles(corners: Quad, width: number, height: number): string
     const angle = Math.atan2(deltaY, deltaX)
     return `left:${start.x * 100}%;top:${start.y * 100}%;width:${distance}px;transform:rotate(${angle}rad)`
   })
+}
+
+export function orientCorners([a, b, c, d]: Quad, rotation: Rotation): Quad {
+  function orient({ x, y }: Point): Point {
+    switch (rotation) {
+      case 90: return { x: 1 - y, y: x }
+      case 180: return { x: 1 - x, y: 1 - y }
+      case 270: return { x: y, y: 1 - x }
+      default: return { x, y }
+    }
+  }
+  return [orient(a), orient(b), orient(c), orient(d)]
+}
+
+export function fitRotatedImageStyle(width: number, height: number, angle: Rotation, frameWidth: number, frameHeight: number): string {
+  const swapSides = angle === 90 || angle === 270
+  const scale = Math.min(frameWidth / (swapSides ? height : width), frameHeight / (swapSides ? width : height))
+  return `width:${width * scale}px;height:${height * scale}px;transform:translate(-50%,-50%) rotate(${angle}deg)`
 }

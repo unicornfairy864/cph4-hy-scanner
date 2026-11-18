@@ -89,13 +89,13 @@ button[disabled] { opacity: 0.5; }
 .preview-toolbar {
   align-items: center;
   display: flex;
-  gap: 16rpx;
+  gap: 8rpx;
   justify-content: space-between;
   min-height: 78rpx;
   padding: 0 0 12rpx;
 }
 
-.preview-count { color: #4c665b; font-size: 25rpx; min-width: 96rpx; }
+.preview-count { color: #4c665b; font-size: 24rpx; white-space: nowrap; }
 .segment { background: #e2ebe3; border-radius: 56rpx; display: flex; padding: 5rpx; }
 .segment > button {
   background: transparent;
@@ -103,26 +103,25 @@ button[disabled] { opacity: 0.5; }
   color: #486253;
   font-size: 25rpx;
   min-height: 52rpx;
-  padding: 10rpx 23rpx;
+  padding: 10rpx 16rpx;
   white-space: nowrap;
 }
 
 .segment > .segment-active { background: #fff; color: #174e44; box-shadow: 0 2rpx 6rpx #173e351f; }
-.preview-actions { display: flex; gap: 10rpx; }
-button.icon-button {
-  align-items: center;
+.preview-actions { align-items: center; display: flex; gap: 7rpx; }
+.save-label { color: #4c665b; font-size: 23rpx; white-space: nowrap; }
+button.save-button {
   background: #e2ebe3;
   color: #174e44;
-  display: flex;
-  font-size: 42rpx;
-  justify-content: center;
-  min-height: 64rpx;
-  padding: 0;
-  width: 64rpx;
+  font-size: 24rpx;
+  line-height: 58rpx;
+  min-height: 58rpx;
+  min-width: 70rpx;
+  padding: 0 10rpx;
+  white-space: nowrap;
 }
 
-button.next-step { background: #185e53; color: #fff; }
-.save-symbol { border-bottom: 3rpx solid currentColor; display: block; font-size: 36rpx; line-height: 32rpx; margin-top: -2rpx; min-width: 29rpx; padding-bottom: 3rpx; }
+button.save-pdf { background: #185e53; color: #fff; }
 
 .image-frame {
   background: #152b25;
@@ -131,7 +130,7 @@ button.next-step { background: #185e53; color: #fff; }
   position: relative;
 }
 
-.page-image { display: block; height: 100%; left: 0; opacity: 0; pointer-events: none; position: absolute; top: 0; width: 100%; }
+.page-image { display: block; height: 100%; left: 50%; opacity: 0; pointer-events: none; position: absolute; top: 50%; transform: translate(-50%,-50%); width: 100%; }
 .page-image-visible { opacity: 1; }
 
 button.image-arrow {
@@ -170,12 +169,12 @@ button.organizer-add { background: #185e53; border-radius: 14rpx; color: #fff; f
   border-radius: 14rpx;
   box-sizing: border-box;
   flex: none;
-  height: 182rpx;
-  margin-right: 12rpx;
+  height: 228rpx;
+  margin-right: 15rpx;
   position: relative;
   text-align: center;
   transition: transform 160ms ease-out, opacity 160ms ease-out;
-  width: 126rpx;
+  width: 158rpx;
 }
 
 .thumbnail-selected { border-color: #185e53; }
@@ -194,11 +193,11 @@ button.organizer-add { background: #185e53; border-radius: 14rpx; color: #fff; f
   transition: none;
   z-index: 5;
 }
-.thumbnail-tap { align-items: center; display: flex; height: 136rpx; justify-content: center; }
+.thumbnail-tap { align-items: center; display: flex; height: 170rpx; justify-content: center; }
 .thumbnail-photo { position: relative; }
-.thumbnail-photo > image { display: block; height: 100%; width: 100%; }
+.thumbnail-photo > image { display: block; left: 50%; position: absolute; top: 50%; }
 .thumbnail-edge { background: #49d0ae; box-shadow: 0 0 1rpx #12473a; height: 2rpx; pointer-events: none; position: absolute; transform-origin: left center; }
-.thumbnail-foot { align-items: center; display: flex; height: 42rpx; justify-content: center; }
+.thumbnail-foot { align-items: center; display: flex; height: 52rpx; justify-content: center; }
 .thumbnail-number { color: #29463e; font-size: 23rpx; }
 
 button.page-delete {

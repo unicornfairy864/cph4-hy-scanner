@@ -5,6 +5,13 @@ export const exportQualities = [
   { label: '清晰', maxDimension: 2400, jpegQuality: 0.9 },
 ]
 
+export interface PreviewImage {
+  imagePath: string
+  width: number
+  height: number
+  rotation: Rotation
+}
+
 export interface ExportPage {
   imagePath: string
   corners: Quad
@@ -14,7 +21,7 @@ export interface ExportPage {
   denoise: boolean
   dewarp: boolean
   enhanced?: string
-  preview?: string
+  preview?: PreviewImage
 }
 
 export interface PdfSession {

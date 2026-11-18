@@ -24,14 +24,15 @@
           <button class="{{!showOriginal ? 'segment-active' : ''}}" data-view="effect" bindtap="selectPreview" disabled="{{!!busy}}">效果</button>
         </view>
         <view class="preview-actions">
-          <button class="icon-button" bindtap="saveJpg" disabled="{{!!busy}}" aria-label="保存 JPG"><text class="save-symbol" aria-hidden="true">↓</text></button>
-          <button class="icon-button next-step" bindtap="openExport" disabled="{{!!busy}}" aria-label="下一步，导出 PDF"><text aria-hidden="true">↗</text></button>
+          <text class="save-label">保存为：</text>
+          <button class="save-button" bindtap="saveJpg" disabled="{{!!busy}}" aria-label="保存图片为 JPG">图片</button>
+          <button class="save-button save-pdf" bindtap="openExport" disabled="{{!!busy}}" aria-label="导出 PDF">PDF</button>
         </view>
       </view>
 
       <view class="image-frame" style="height:{{previewHeight}}px">
         <image wx:for="{{previewLayers}}" wx:key="path" class="page-image {{item.visible ? 'page-image-visible' : ''}}"
-          src="{{item.path}}" data-path="{{item.path}}" mode="aspectFit" bindload="finishPreviewLoad" binderror="failPreviewLoad" />
+          src="{{item.path}}" data-path="{{item.path}}" style="{{item.style}}" mode="aspectFit" bindload="finishPreviewLoad" binderror="failPreviewLoad" />
         <button class="image-arrow image-arrow-prev" data-direction="-1" bindtap="changePage"
           disabled="{{!!busy || selected === 0}}" aria-label="上一页">‹</button>
         <button class="image-arrow image-arrow-next" data-direction="1" bindtap="changePage"
@@ -39,8 +40,8 @@
       </view>
     </view>
 
-    <scroll-view class="controls-scroll" scroll-y="{{dragId < 0}}" enhanced show-scrollbar="{{false}}" bindscroll="onControlsScroll">
-      <view class="controls-content" style="min-height:{{controlsMinHeight}}px">
+    <scroll-view class="controls-scroll" scroll-y="{{dragId < 0}}" enhanced show-scrollbar="{{false}}">
+      <view class="controls-content">
         <view class="button-row organizer-actions">
           <button class="secondary organizer-button" data-direction="-1" bindtap="moveSelectedPage" disabled="{{!!busy || selected === 0 || dragId >= 0}}"><text class="organizer-symbol" aria-hidden="true">←</text><text>左移</text></button>
           <button class="secondary organizer-button" data-direction="1" bindtap="moveSelectedPage" disabled="{{!!busy || selected === pageCount - 1 || dragId >= 0}}"><text class="organizer-symbol" aria-hidden="true">→</text><text>右移</text></button>
@@ -59,11 +60,11 @@
               <view class="thumbnail-track" style="transform:translateX({{thumbTrackShift}}px)">
                 <view wx:for="{{pages}}" wx:key="id" id="scan-page-{{item.id}}" data-index="{{index}}"
                   class="thumbnail {{selected === index ? 'thumbnail-selected' : ''}} {{dragId === item.id ? 'thumbnail-dragging' : ''}} {{dragTarget === index && dragId !== item.id ? 'thumbnail-target' : ''}} {{dragFrom < index && index <= dragTarget && dragId >= 0 ? 'thumbnail-slide-left' : ''}} {{dragTarget <= index && index < dragFrom && dragId >= 0 ? 'thumbnail-slide-right' : ''}}"
-                  bindtap="selectPage" bindtouchstart="rememberPageTouch" bindlongpress="startPageDrag"
+                  bindtap="selectPage" bindtouchstart="rememberPageTouch"
                   bindtouchmove="movePageDrag" bindtouchend="endPageDrag" bindtouchcancel="cancelPageDrag">
                   <view class="thumbnail-tap" aria-role="button" aria-label="第 {{index + 1}} 页">
                     <view class="thumbnail-photo" style="width:{{item.width}}px;height:{{item.height}}px">
-                      <image src="{{item.source}}" mode="scaleToFill" lazy-load />
+                      <image src="{{item.source}}" mode="scaleToFill" style="{{item.photoStyle}}" lazy-load />
                       <view wx:for="{{item.lines}}" wx:for-item="line" wx:key="id" class="thumbnail-edge" style="{{line.style}}" />
                     </view>
                   </view>
@@ -118,7 +119,7 @@
     style="transform:translate3d({{dragGhost.left}}px,{{dragGhost.top}}px,0)" aria-hidden="true">
     <view class="thumbnail-tap">
       <view class="thumbnail-photo" style="width:{{dragGhost.width}}px;height:{{dragGhost.height}}px">
-        <image src="{{dragGhost.source}}" mode="scaleToFill" />
+        <image src="{{dragGhost.source}}" mode="scaleToFill" style="{{dragGhost.photoStyle}}" />
         <view wx:for="{{dragGhost.lines}}" wx:key="id" class="thumbnail-edge" style="{{item.style}}" />
       </view>
     </view>

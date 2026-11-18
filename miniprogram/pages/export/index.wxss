@@ -2,7 +2,7 @@ page { background: #f2f5f1; color: #142923; font-family: -apple-system, BlinkMac
 .export-page { padding: 28rpx; }
 .export-card { background: #fff; border: 1rpx solid #dfe7e1; border-radius: 28rpx; padding: 32rpx; }
 .preview-frame { background: #152b25; border-radius: 18rpx; height: 44vh; max-height: 860rpx; overflow: hidden; position: relative; }
-.preview-image { display: block; height: 100%; width: 100%; }
+.preview-image { display: block; height: 100%; left: 50%; position: absolute; top: 50%; transform: translate(-50%,-50%); width: 100%; }
 button.preview-arrow { align-items: center; background: #152b25cc; border: 1rpx solid #f2fff34d; border-radius: 50%; color: #fff; display: flex; font-size: 48rpx; height: 72rpx; justify-content: center; min-height: 72rpx; padding: 0 0 4rpx; position: absolute; top: 50%; transform: translateY(-50%); width: 72rpx; }
 .preview-prev { left: 10rpx; }
 .preview-next { right: 10rpx; }
