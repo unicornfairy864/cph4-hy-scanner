@@ -125,8 +125,9 @@ interface ScannerData {
   modes: typeof modes
   deleteArmed: number
   dragId: number
+  dragFrom: number
   dragTarget: number
-  dragTargetShift: number
+  dragNeighborShift: number
   dragSettling: boolean
   dragGhost: DragGhost | null
   swapFrom: number
@@ -192,7 +193,7 @@ interface ScannerActions {
   endPageDrag(event: WechatMiniprogram.TouchEvent): void
   cancelPageDrag(event?: WechatMiniprogram.TouchEvent): void
   stopPageDrag(commit?: boolean): void
-  swapPages(from: number, to: number, reset: Partial<ScannerData>, applied?: () => void): void
+  insertPage(from: number, to: number, reset: Partial<ScannerData>, applied?: () => void): void
   moveSelectedPage(event: WechatMiniprogram.TouchEvent): void
   startButtonSwap(): void
   finishButtonSwap(continueQueued: boolean): void
@@ -299,7 +300,7 @@ Page<ScannerData, ScannerActions>({
     showOriginal: false, hasEnhanced: false, autoDetected: false, partialDetected: false,
     cornerConfidences: [0, 0, 0, 0], mode: 'color', enhance: true, denoise: true, dewarp: false,
     cropOpen: false, cropWidth: 0, cropHeight: 0, cropRotation: 0, corners: fullImageCorners, modes,
-    deleteArmed: -1, dragId: -1, dragTarget: -1, dragTargetShift: 0, dragSettling: false, dragGhost: null,
+    deleteArmed: -1, dragId: -1, dragFrom: -1, dragTarget: -1, dragNeighborShift: 0, dragSettling: false, dragGhost: null,
     swapFrom: -1, swapTo: -1, swapShift: 0,
     thumbTrackShift: 0, thumbScrollLeft: 0, thumbAnchor: '', thumbMaxOffset: 0, thumbProgress: 0,
     busy: '', needsAlbumAccess: false,
@@ -780,7 +781,7 @@ Page<ScannerData, ScannerActions>({
     }
     this.pageDrag = drag
     this.setData({
-      dragId: press.id, dragTarget: from, dragTargetShift: 0, deleteArmed: -1, thumbAnchor: '',
+      dragId: press.id, dragFrom: from, dragTarget: from, dragNeighborShift: 0, deleteArmed: -1, thumbAnchor: '',
       dragGhost: { ...tile, number: from + 1, left: x - drag.gripX, top: y - drag.gripY },
       thumbScrollLeft: Math.round(drag.scroll),
     })
@@ -826,7 +827,7 @@ Page<ScannerData, ScannerActions>({
     drag.target = Math.max(0, Math.min(this.scans.length - 1, drag.press.from + Math.round(delta / (TILE_STRIDE * this.rpx))))
     this.setData({
       dragTarget: drag.target,
-      dragTargetShift: (drag.press.from - drag.target) * TILE_STRIDE * this.rpx,
+      dragNeighborShift: Math.sign(drag.press.from - drag.target) * TILE_STRIDE * this.rpx,
       thumbTrackShift: this.actualThumbScroll - drag.scroll,
       thumbProgress: scrollProgress(drag.scroll, this.data.thumbMaxOffset),
       'dragGhost.left': drag.x - drag.gripX,
@@ -900,23 +901,21 @@ Page<ScannerData, ScannerActions>({
     if (drag.settleTimer !== undefined) clearTimeout(drag.settleTimer)
     if (this.closed) return
     const reset: Partial<ScannerData> = {
-      dragId: -1, dragTarget: -1, dragTargetShift: 0, dragSettling: false, dragGhost: null,
+      dragId: -1, dragFrom: -1, dragTarget: -1, dragNeighborShift: 0, dragSettling: false, dragGhost: null,
       thumbTrackShift: 0, thumbScrollLeft: Math.round(drag.scroll), thumbProgress: scrollProgress(drag.scroll, this.data.thumbMaxOffset),
     }
-    if (commit) this.swapPages(drag.press.from, drag.target, reset)
+    if (commit) this.insertPage(drag.press.from, drag.target, reset)
     else this.setData(reset)
   },
 
-  swapPages(from, to, reset, applied) {
+  insertPage(from, to, reset, applied) {
     const selected = this.current()
-    const source = this.scans[from]
-    const target = this.scans[to]
-    if (!selected || !source || !target || from === to) {
+    if (!selected || !this.scans[from] || !this.scans[to] || from === to) {
       this.setData(reset, applied)
       return
     }
-    this.scans[from] = target
-    this.scans[to] = source
+    const [source] = this.scans.splice(from, 1)
+    this.scans.splice(to, 0, source)
     this.selectedPage = this.scans.indexOf(selected)
     this.setData({ ...reset, pages: this.galleryPages(), selected: this.selectedPage }, applied)
   },
@@ -956,7 +955,7 @@ Page<ScannerData, ScannerActions>({
     if (swap.timer !== undefined) clearTimeout(swap.timer)
     if (this.closed) return
     const anchor = continueQueued && !this.thumbScrubbing && Math.abs(this.actualThumbScroll - swap.scroll) < 1
-    this.swapPages(swap.from, swap.to, { swapFrom: -1, swapTo: -1, swapShift: 0 }, () => {
+    this.insertPage(swap.from, swap.to, { swapFrom: -1, swapTo: -1, swapShift: 0 }, () => {
       if (!continueQueued || this.closed) return
       this.startButtonSwap()
       const page = this.current()

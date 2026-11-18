@@ -108,20 +108,18 @@ button[disabled] { opacity: 0.5; }
 }
 
 .segment > .segment-active { background: #fff; color: #174e44; box-shadow: 0 2rpx 6rpx #173e351f; }
-.preview-actions { align-items: center; display: flex; gap: 7rpx; }
+.preview-actions { align-items: center; display: flex; gap: 12rpx; }
 .save-label { color: #4c665b; font-size: 23rpx; white-space: nowrap; }
 button.save-button {
   background: #e2ebe3;
   color: #174e44;
+  flex: 0 0 76rpx;
   font-size: 24rpx;
   line-height: 58rpx;
   min-height: 58rpx;
-  min-width: 70rpx;
   padding: 0 10rpx;
   white-space: nowrap;
 }
-
-button.save-pdf { background: #185e53; color: #fff; }
 
 .image-frame {
   background: #152b25;
@@ -179,8 +177,7 @@ button.organizer-add { background: #185e53; border-radius: 14rpx; color: #fff; f
 
 .thumbnail-selected { border-color: #185e53; }
 .thumbnail-moving { transition: transform 150ms ease-out, opacity 150ms ease-out; }
-.thumbnail-dragging { opacity: 0.14; }
-.thumbnail-target { border-color: #268578; border-style: dashed; z-index: 2; }
+.thumbnail-dragging { opacity: 0; }
 .thumbnail-swapping { z-index: 1; }
 .thumbnail-swapping.thumbnail-selected { z-index: 2; }
 .thumbnail-ghost {

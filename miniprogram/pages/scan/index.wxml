@@ -26,7 +26,7 @@
         <view class="preview-actions">
           <text class="save-label">保存为：</text>
           <button class="save-button" bindtap="saveJpg" disabled="{{!!busy || dragId >= 0 || swapFrom >= 0}}" aria-label="保存图片为 JPG">图片</button>
-          <button class="save-button save-pdf" bindtap="openExport" disabled="{{!!busy || dragId >= 0 || swapFrom >= 0}}" aria-label="导出 PDF">PDF</button>
+          <button class="save-button" bindtap="openExport" disabled="{{!!busy || dragId >= 0 || swapFrom >= 0}}" aria-label="导出 PDF">PDF</button>
         </view>
       </view>
 
@@ -59,8 +59,8 @@
               scroll-into-view="{{thumbAnchor}}" bindscroll="onThumbnailsScroll" aria-label="扫描页列表">
               <view class="thumbnail-track" style="transform:translateX({{thumbTrackShift}}px)">
                 <view wx:for="{{pages}}" wx:key="id" id="scan-page-{{item.id}}" data-index="{{index}}"
-                  class="thumbnail {{selected === index ? 'thumbnail-selected' : ''}} {{dragId >= 0 || swapFrom >= 0 ? 'thumbnail-moving' : ''}} {{dragId === item.id ? 'thumbnail-dragging' : ''}} {{dragTarget === index && dragId !== item.id ? 'thumbnail-target' : ''}} {{swapFrom === index || swapTo === index ? 'thumbnail-swapping' : ''}}"
-                  style="transform:translateX({{dragTarget === index ? dragTargetShift : (swapFrom === index ? swapShift : (swapTo === index ? -swapShift : 0))}}px)"
+                  class="thumbnail {{selected === index ? 'thumbnail-selected' : ''}} {{dragId >= 0 || swapFrom >= 0 ? 'thumbnail-moving' : ''}} {{dragId === item.id ? 'thumbnail-dragging' : ''}} {{swapFrom === index || swapTo === index ? 'thumbnail-swapping' : ''}}"
+                  style="transform:translateX({{((dragFrom < index && index <= dragTarget) || (dragTarget <= index && index < dragFrom)) ? dragNeighborShift : (swapFrom === index ? swapShift : (swapTo === index ? -swapShift : 0))}}px)"
                   bindtap="selectPage" bindtouchstart="rememberPageTouch"
                   bindtouchmove="movePageDrag" bindtouchend="endPageDrag" bindtouchcancel="cancelPageDrag">
                   <view class="thumbnail-tap" aria-role="button" aria-label="第 {{index + 1}} 页">
