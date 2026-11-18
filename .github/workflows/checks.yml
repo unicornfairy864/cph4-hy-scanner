@@ -1,0 +1,60 @@
+name: Checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  miniprogram:
+    name: Mini Program
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - name: Install npm dependencies
+        id: npm-install
+        run: |
+          if [[ -f package-lock.json ]]; then
+            npm ci
+          else
+            npm install --no-audit --no-fund
+            echo 'generated-lock=true' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Save generated npm lockfile
+        if: steps.npm-install.outputs.generated-lock == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: npm-lockfile-${{ github.sha }}
+          path: package-lock.json
+          if-no-files-found: error
+          retention-days: 7
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  server:
+    name: VPS service
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: server/requirements.txt
+      - run: python -m pip install -r requirements.txt
+      - run: python -m unittest discover -s tests -v

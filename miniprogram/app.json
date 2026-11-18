@@ -1,0 +1,10 @@
+{
+  "pages": ["pages/scan/index"],
+  "workers": "workers",
+  "window": {
+    "navigationBarTitleText": "文档扫描",
+    "navigationBarBackgroundColor": "#f6f7f5",
+    "navigationBarTextStyle": "black",
+    "backgroundColor": "#f6f7f5"
+  }
+}
