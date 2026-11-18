@@ -1,0 +1,233 @@
+import asyncio
+from io import BytesIO
+from pathlib import Path
+from tempfile import TemporaryDirectory
+import time
+import unittest
+
+from fastapi import HTTPException
+import httpx
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
+
+from scanner.app import Settings, WeChatExchange, create_app
+from scanner.imaging import flatten_page, remove_shadow
+from scanner.jobs import JobService, QueueFull
+
+
+def sample_page() -> Image.Image:
+    image = Image.new("RGB", (660, 800), (236, 236, 233))
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.load_default(size=20)
+    lines = [
+        "Convert clear printed pages to a readable document.",
+        "A curved book page may distort its lines of text.",
+        "Paper color and handwritten annotations are kept.",
+        "Multiple batches can include varied layouts and text.",
+    ]
+    for index, y in enumerate(range(72, 725, 32)):
+        draw.text((52, y), lines[index % len(lines)], fill=(32, 32, 32), font=font)
+    return image
+
+
+def shadowed_page() -> Image.Image:
+    pixels = np.asarray(sample_page()).astype(np.float32)
+    pixels[:, :300] *= 0.54
+    return Image.fromarray(np.uint8(pixels))
+
+
+def curved_page() -> Image.Image:
+    pixels = np.asarray(sample_page())
+    curved = pixels.copy()
+    height, width = pixels.shape[:2]
+    x = np.linspace(-1, 1, width)
+    offsets = np.rint(x * x * 68 + x * 8).astype(int)
+    for column, offset in enumerate(offsets):
+        curved[:, column] = pixels[np.clip(np.arange(height) - offset, 0, height - 1), column]
+    return Image.fromarray(curved)
+
+
+def jpeg(image: Image.Image) -> bytes:
+    output = BytesIO()
+    image.save(output, format="JPEG")
+    return output.getvalue()
+
+
+class AlgorithmTests(unittest.TestCase):
+    def test_shadow_removal_reduces_paper_brightness_difference(self):
+        initial = np.asarray(shadowed_page())
+        corrected = np.asarray(remove_shadow(shadowed_page()))
+        self.assertLess(abs(int(corrected[30, 30, 0]) - int(corrected[30, 500, 0])), 12)
+        self.assertGreater(int(initial[30, 500, 0]) - int(initial[30, 30, 0]), 80)
+        self.assertGreater(np.count_nonzero(corrected[:, :250, 0] < 120), 2000)
+
+    def test_dewarp_improves_horizontal_alignment_of_text(self):
+        input_page = curved_page()
+        result = flatten_page(input_page)
+
+        def rows_with_ink(image: Image.Image) -> float:
+            ink = np.asarray(image.convert("L"))[60:740, 85:520] < 120
+            return float(ink.sum(axis=1).std())
+
+        self.assertGreater(rows_with_ink(result), rows_with_ink(input_page) * 1.25)
+
+
+class ApiTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.temp = TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.settings = Settings("id", "secret", "x" * 40, Path(self.temp.name),
+                                 task_timeout=7, task_ttl=2)
+        app = create_app(self.settings, self.fake_login)
+        await self.enterAsyncContext(app.router.lifespan_context(app))
+        self.client = await self.enterAsyncContext(httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test",
+        ))
+
+    async def fake_login(self, code: str) -> str:
+        if code not in ("alice", "bob"):
+            raise HTTPException(401)
+        return code
+
+    async def headers(self, code: str = "alice") -> dict[str, str]:
+        response = await self.client.post("/v1/auth/wechat", json={"code": code})
+        self.assertEqual(response.status_code, 200)
+        return {"Authorization": "Bearer " + response.json()["accessToken"]}
+
+    async def submit(self, headers, request_id="example", operation="deshadow", source=None):
+        return await self.client.post(
+            "/v1/jobs", headers=headers,
+            data={"operation": operation, "clientRequestId": request_id},
+            files={"file": ("page.jpg", jpeg(shadowed_page()) if source is None else source,
+                            "image/jpeg")},
+        )
+
+    async def wait_for_job(self, headers, path):
+        end = time.monotonic() + 8
+        while time.monotonic() < end:
+            response = await self.client.get(path, headers=headers)
+            self.assertEqual(response.status_code, 200)
+            status = response.json()["status"]
+            if status not in ("queued", "running"):
+                return response
+            await asyncio.sleep(0.03)
+        self.fail("The test enhancement did not finish")
+
+    async def test_owner_retries_result_and_delete(self):
+        alice = await self.headers()
+        bob = await self.headers("bob")
+        submit = await self.submit(alice)
+        self.assertEqual(submit.status_code, 202, submit.text)
+        job_id = submit.json()["jobId"]
+        path = f"/v1/jobs/{job_id}"
+        self.assertEqual((await self.submit(alice)).json()["jobId"], job_id)
+        self.assertEqual((await self.submit(alice, operation="dewarp")).status_code, 409)
+        self.assertEqual((await self.client.get(path, headers=bob)).status_code, 404)
+        self.assertEqual((await self.client.delete(path, headers=bob)).status_code, 404)
+        self.assertEqual((await self.client.get(path + "/result", headers=bob)).status_code, 404)
+        self.assertEqual((await self.client.get(path)).status_code, 401)
+        self.assertEqual((await self.wait_for_job(alice, path)).json()["status"], "succeeded")
+        result = await self.client.get(path + "/result", headers=alice)
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.headers["content-type"], "image/jpeg")
+        self.assertEqual(result.headers["cache-control"], "private, no-store")
+        with Image.open(BytesIO(result.content)) as image:
+            self.assertEqual(image.size, (660, 800))
+        directory = self.settings.data_dir / "jobs" / job_id
+        self.assertFalse((directory / "source.jpg").exists())
+        self.assertEqual((await self.client.delete(path, headers=alice)).status_code, 204)
+        self.assertFalse(directory.exists())
+        self.assertEqual((await self.client.get(path, headers=alice)).status_code, 404)
+
+    async def test_invalid_input_and_limits(self):
+        token = await self.headers()
+        self.assertEqual((await self.submit(token, source=b"not a jpeg")).status_code, 422)
+        big = Image.new("RGB", (3000, 2200), "white")
+        self.assertEqual((await self.submit(token, source=jpeg(big))).status_code, 413)
+        self.assertEqual((await self.submit(token, source=b"x" * (8 * 2**20 + 1))).status_code, 413)
+        self.assertEqual((await self.submit(token, request_id="invalid id")).status_code, 422)
+        self.assertEqual((await self.submit(token, operation="unknown")).status_code, 422)
+
+    async def test_unsupported_page_fails_without_persisting_input(self):
+        token = await self.headers()
+        data = jpeg(Image.new("RGB", (300, 400), "white"))
+        submit = await self.submit(token, operation="dewarp", source=data)
+        self.assertEqual(submit.status_code, 202)
+        job_id = submit.json()["jobId"]
+        path = f"/v1/jobs/{job_id}"
+        result = (await self.wait_for_job(token, path)).json()
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error"]["code"], "unsupported_page")
+        self.assertFalse((self.settings.data_dir / "jobs" / job_id / "source.jpg").exists())
+        self.assertEqual((await self.client.get(path + "/result", headers=token)).status_code, 409)
+
+    async def test_delete_revokes_immediately_and_removes_files(self):
+        token = await self.headers()
+        submit = await self.submit(token)
+        job_id = submit.json()["jobId"]
+        path = f"/v1/jobs/{job_id}"
+        self.assertEqual((await self.client.delete(path, headers=token)).status_code, 204)
+        self.assertEqual((await self.client.get(path, headers=token)).status_code, 404)
+        directory = self.settings.data_dir / "jobs" / job_id
+        deadline = time.monotonic() + 3
+        while directory.exists() and time.monotonic() < deadline:
+            await asyncio.sleep(0.025)
+        self.assertFalse(directory.exists())
+
+    async def test_result_expires_and_files_are_removed(self):
+        token = await self.headers()
+        submit = await self.submit(token)
+        job_id = submit.json()["jobId"]
+        path = f"/v1/jobs/{job_id}"
+        await self.wait_for_job(token, path)
+        await asyncio.sleep(self.settings.task_ttl + 0.1)
+        self.assertEqual((await self.client.get(path, headers=token)).status_code, 404)
+        self.assertFalse((self.settings.data_dir / "jobs" / job_id).exists())
+
+    async def test_wechat_exchange_sends_expected_fields(self):
+        def respond(request: httpx.Request) -> httpx.Response:
+            self.assertEqual(request.url.host, "api.weixin.qq.com")
+            self.assertEqual(request.url.path, "/sns/jscode2session")
+            self.assertEqual(request.url.params["js_code"], "some-code")
+            self.assertEqual(request.url.params["appid"], self.settings.app_id)
+            self.assertEqual(request.url.params["secret"], self.settings.app_secret)
+            return httpx.Response(200, json={"openid": "wechat-user", "session_key": "secret"})
+
+        async def check():
+            async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+                self.assertEqual(await WeChatExchange(self.settings, client)("some-code"),
+                                 "wechat-user")
+
+        await check()
+
+
+class QueueTests(unittest.IsolatedAsyncioTestCase):
+    async def test_capacity_and_serial_dispatch_after_worker_timeout(self):
+        with TemporaryDirectory() as directory:
+            jobs = JobService(Path(directory), 1024, 100_000, 0.01, 10,
+                              queue_limit=2, owner_limit=1)
+            await jobs.start()
+            try:
+                first = jobs.submit("alice", "first", "a", "deshadow", b"file")
+                with self.assertRaises(QueueFull):
+                    jobs.submit("alice", "second", "b", "deshadow", b"file")
+                second = jobs.submit("bob", "first", "c", "deshadow", b"file")
+                with self.assertRaises(QueueFull):
+                    jobs.submit("carl", "first", "d", "deshadow", b"file")
+
+                deadline = time.monotonic() + 6
+                while second.status != "failed" and time.monotonic() < deadline:
+                    if second.status == "running":
+                        self.assertEqual(first.status, "failed")
+                    await asyncio.sleep(0.005)
+                self.assertEqual(first.error, "processing_timeout")
+                self.assertEqual(second.error, "processing_timeout")
+                self.assertFalse(first.source.exists())
+                self.assertFalse(second.source.exists())
+                self.assertIsNone(jobs.active)
+            finally:
+                await jobs.close()
+
+
+if __name__ == "__main__":
+    unittest.main()
