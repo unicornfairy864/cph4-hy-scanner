@@ -62,7 +62,9 @@ class RealOcrTests(unittest.TestCase):
             self.fail(reason)
         self.skipTest(reason)
 
-    def recognize_sample(self, lines: list[str], font: ImageFont.FreeTypeFont, languages: str) -> dict:
+    def recognize_sample(
+        self, lines: list[str], font: ImageFont.FreeTypeFont, languages: str, line_spacing: int = 86,
+    ) -> dict:
         width, height = 1100, 760
         with TemporaryDirectory() as directory:
             source = Path(directory) / "sample.jpg"
@@ -70,7 +72,7 @@ class RealOcrTests(unittest.TestCase):
             image = Image.new("RGB", (width, height), "white")
             draw = ImageDraw.Draw(image)
             for index, line in enumerate(lines):
-                draw.text((78, 100 + index * 86), line, font=font, fill="black")
+                draw.text((78, 100 + index * line_spacing), line, font=font, fill="black")
             image.save(source, format="JPEG", quality=95, dpi=(300, 300))
             recognize_document(source, output, 6_000_000, 8 * 1024 * 1024, languages)
             result = json.loads(output.read_text())
@@ -101,11 +103,24 @@ class RealOcrTests(unittest.TestCase):
                 self.fail(reason)
             self.skipTest(reason)
         result = self.recognize_sample(
-            ["简体中文印刷文字", "文档扫描文字识别", "Printed document in English"],
+            [
+                "简体中文印刷文字识别示例",
+                "文档扫描保留清晰的文字和行序",
+                "扫描后的文字可以复制和编辑",
+                "本页包含中文与英文两段文字",
+                "",
+                "Printed document in English",
+                "Scanned text keeps each line readable",
+                "Each paragraph contains several lines",
+            ],
             ImageFont.truetype(str(font_path), size=52, index=2),
             LANGUAGES,
+            line_spacing=65,
         )
-        self.assertIn("简体中文", result["text"])
-        self.assertIn("文档扫描", result["text"])
-        self.assertIn("printed document in english", result["text"].lower())
-        self.assertGreaterEqual(len(result["lines"]), 3)
+        text = result["text"].lower()
+        expected = ["简体中文", "文档扫描", "printed document in english", "scanned text keeps each line readable"]
+        for phrase in expected:
+            self.assertIn(phrase, text)
+        positions = [text.index(phrase) for phrase in expected]
+        self.assertEqual(positions, sorted(positions))
+        self.assertGreaterEqual(len(result["lines"]), 7)
