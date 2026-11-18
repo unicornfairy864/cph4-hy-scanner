@@ -260,7 +260,7 @@ Page<ScannerData, ScannerActions>({
     if (this.data.busy) return
     const sources: ImageSource[] = ['camera', 'album', 'chat']
     wx.showActionSheet({
-      itemList: ['拍照', '从相册导入', '从聊天导入'],
+      itemList: ['📷 相机拍摄', '🖼 图库导入', '💬 对话导入'],
       success: ({ tapIndex }) => {
         const source = sources[tapIndex]
         if (source && !this.closed) void this.addPages(source)
