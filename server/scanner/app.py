@@ -19,7 +19,8 @@ from starlette.datastructures import Headers, UploadFile
 from starlette.formparsers import MultiPartException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from scanner.jobs import OPERATIONS, Job, JobService, QueueFull, RequestConflict
+from scanner.jobs import JSON_OPERATIONS, OPERATIONS, Job, JobService, QueueFull, RequestConflict
+from scanner.smart import SMART_OPERATIONS, ProviderConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,6 +214,8 @@ def create_app(
                     or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", request_id)
                     or not isinstance(file, UploadFile)):
                 raise HTTPException(422, "Provide file, operation and a valid clientRequestId")
+            if operation in SMART_OPERATIONS and ProviderConfig.from_env() is None:
+                raise HTTPException(503, {"code": "smart_unavailable"})
             contents = await file.read(settings.max_bytes + 1)
         validate_image(contents, settings)
         digest = hashlib.sha256(contents).hexdigest()
@@ -238,7 +241,7 @@ def create_app(
             contents = job.output.read_bytes()
         except FileNotFoundError:
             raise HTTPException(404, "Result not found or expired") from None
-        if job.operation == "ocr":
+        if job.operation in JSON_OPERATIONS:
             return Response(content=contents, media_type="application/json",
                             headers={"Cache-Control": "private, no-store"})
         return Response(content=contents, media_type="image/jpeg",

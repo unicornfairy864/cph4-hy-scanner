@@ -5,6 +5,7 @@ class FakeCanvas {
   width = 1;
   height = 1;
   written: Uint8ClampedArray | undefined;
+  edits: string[] = [];
 
   createImage() {
     return {
@@ -23,6 +24,13 @@ class FakeCanvas {
     return {
       fillRect: () => undefined,
       drawImage: () => undefined,
+      save: () => undefined,
+      restore: () => undefined,
+      setTransform: () => { this.edits.push('rotate'); },
+      translate: () => undefined,
+      rotate: () => undefined,
+      measureText: () => ({ width: 12 }),
+      fillText: () => { this.edits.push('watermark'); },
       getImageData: (x: number, y: number, width: number, height: number) => {
         assert.deepEqual([x, y, width, height], [0, 0, this.width, this.height]);
         return { width, height, data: new Uint8ClampedArray(width * height * 4).fill(245) };
@@ -30,13 +38,17 @@ class FakeCanvas {
       createImageData: (width: number, height: number) => ({
         width, height, data: new Uint8ClampedArray(width * height * 4),
       }),
-      putImageData: ({ data }: { data: Uint8ClampedArray }) => { this.written = data; },
+      putImageData: ({ data }: { data: Uint8ClampedArray }) => {
+        this.written = data;
+        this.edits.push('pixels');
+      },
     };
   }
 }
 
 test('keeps local rendering and JPG export available after Worker creation fails', async () => {
   let workerRequests = 0;
+  const outputEdits: string[][] = [];
   const source = 'wxfile://scan.jpg';
   Object.defineProperty(globalThis, 'wx', {
     configurable: true,
@@ -53,13 +65,14 @@ test('keeps local rendering and JPG export available after Worker creation fails
         assert.equal(fileType, 'jpg');
         assert.equal(quality, 0.9);
         assert.equal(canvas.written?.length, 30 * 40 * 4);
+        outputEdits.push(canvas.edits);
         success({ tempFilePath: 'wxfile://result.jpg' });
       },
     },
   });
 
   try {
-    const { prepareImage, detectQuad, renderPage } = await import('../miniprogram/image/index');
+    const { prepareImage, detectQuad, renderPage, decorateImage } = await import('../miniprogram/image/index');
     const image = await prepareImage({ imagePath: source });
     assert.deepEqual(image, { imagePath: source, width: 80, height: 60 });
     assert.deepEqual(await detectQuad(image), { corners: null, confidence: 0, cornerConfidences: [0, 0, 0, 0] });
@@ -69,6 +82,15 @@ test('keeps local rendering and JPG export available after Worker creation fails
       rotation: 90, denoise: false, mode: 'color', quality: 'export', maxDimension: 40, jpegQuality: 0.9,
     });
     assert.deepEqual(result, { imagePath: 'wxfile://result.jpg', width: 30, height: 40 });
+    const decorated = await decorateImage({
+      imagePath: image.imagePath, rotation: 90, quality: 'export', maxDimension: 40, jpegQuality: 0.9,
+      decorations: {
+        mosaics: [{ x: 0, y: 0, width: 0.5, height: 0.5 }],
+        watermarks: [{ kind: 'text', text: '现已编辑', layout: 'single', opacity: 0.3, size: 0.2, angle: 0 }],
+      },
+    });
+    assert.deepEqual(decorated, { imagePath: 'wxfile://result.jpg', width: 30, height: 40 });
+    assert.deepEqual(outputEdits, [['pixels'], ['rotate', 'pixels', 'watermark']]);
     assert.equal(workerRequests, 1);
   } finally {
     Reflect.deleteProperty(globalThis, 'wx');

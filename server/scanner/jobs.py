@@ -12,9 +12,13 @@ from time import monotonic
 from typing import Literal
 from uuid import uuid4
 
+from scanner.smart import AI_ENVIRONMENT, SMART_OPERATIONS
 
-Operation = Literal["dewarp", "deshadow", "ocr"]
-OPERATIONS = ("dewarp", "deshadow", "ocr")
+
+Operation = Literal["dewarp", "deshadow", "ocr", "receipt", "identity", "exam", "clarify", "exam_restore"]
+RESTORATION_OPERATIONS = ("clarify", "exam_restore")
+JSON_OPERATIONS = ("ocr", *SMART_OPERATIONS)
+OPERATIONS = ("dewarp", "deshadow", *JSON_OPERATIONS, *RESTORATION_OPERATIONS)
 Status = Literal["queued", "running", "succeeded", "failed"]
 LOGGER = logging.getLogger(__name__)
 
@@ -22,6 +26,8 @@ ERRORS = {
     "unsupported_page": "This page does not have enough clear text lines for dewarping.",
     "invalid_image": "The uploaded JPEG could not be decoded.",
     "ocr_unavailable": "Install Tesseract and its Simplified Chinese and English language data.",
+    "smart_unavailable": "Smart document recognition is not configured.",
+    "smart_provider_error": "The document provider did not return a usable result.",
     "processing_error": "Enhancement could not be completed.",
     "processing_timeout": "Enhancement timed out.",
     "queue_timeout": "The queued task expired before processing.",
@@ -55,7 +61,7 @@ class Job:
 
     @property
     def output(self) -> Path:
-        return self.directory / ("result.json" if self.operation == "ocr" else "result.jpg")
+        return self.directory / ("result.json" if self.operation in JSON_OPERATIONS else "result.jpg")
 
     def as_dict(self) -> dict:
         data = {"jobId": self.id, "status": self.status}
@@ -235,6 +241,8 @@ class JobService:
         # WeChat credentials or the token signing key from the API.
         environment = {key: os.environ[key] for key in ("PATH", "PYTHONPATH", "LANG", "TESSDATA_PREFIX")
                        if key in os.environ}
+        if job.operation in SMART_OPERATIONS:
+            environment.update({key: os.environ[key] for key in AI_ENVIRONMENT if key in os.environ})
         environment.update(OPENBLAS_NUM_THREADS="1", OMP_NUM_THREADS="1", MKL_NUM_THREADS="1",
                            PYTHONDONTWRITEBYTECODE="1")
         self.process = await asyncio.create_subprocess_exec(
@@ -260,5 +268,8 @@ class JobService:
             self._finish(job)
         else:
             self._kill_process()
-            errors = {2: "unsupported_page", 3: "invalid_image", 4: "ocr_unavailable"}
+            errors = {
+                2: "unsupported_page", 3: "invalid_image", 4: "ocr_unavailable",
+                5: "smart_unavailable", 6: "smart_provider_error",
+            }
             self._finish(job, errors.get(code, "processing_error"))

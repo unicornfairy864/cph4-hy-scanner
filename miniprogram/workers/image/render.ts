@@ -1,4 +1,5 @@
 import { flattenBookPage } from './dewarp';
+import { mosaicFrame, sharpenFrame } from './finish';
 import type { Frame, Point, Quad, RenderOptions } from './types';
 
 function luminance(red: number, green: number, blue: number): number {
@@ -221,6 +222,8 @@ export function renderDocument(source: Frame, options: RenderOptions): Frame {
   const cropped = warp(source, options);
   const result = options.dewarp ? flattenBookPage(cropped) : cropped;
   if (options.denoise) removeIsolatedPixels(result);
+  sharpenFrame(result, options.sharpen);
   enhance(result, options);
+  mosaicFrame(result, options.mosaics);
   return result;
 }
