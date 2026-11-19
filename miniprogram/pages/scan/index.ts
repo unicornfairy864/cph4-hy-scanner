@@ -1,9 +1,10 @@
-import { detectQuad, prepareImage, renderPage } from '../../image'
-import type { ImageMode, Quad, Rotation } from '../../image'
+import { decorateImage, detectQuad, prepareImage, renderPage } from '../../image'
+import type { ImageDecorations, ImageMode, Quad, Rotation, SharpenStrength } from '../../image'
 import { cloudEnabled, runCloudEnhancement, runCloudOcr } from '../../services/cloud'
 import type { CloudOperation } from '../../services/cloud'
 import { exportQualities } from '../export/session'
 import type { ExportPage, PdfSession, PreviewImage } from '../export/session'
+import type { DecorateSession, DecorationEdits } from '../decorate/session'
 import { edgeStyles, fitImage, fitRotatedImageStyle, fullImageCorners, isValidCrop, orientCorners } from './geometry'
 
 const MAX_PAGES = 30
@@ -19,6 +20,9 @@ const modes: Array<{ value: ImageMode; label: string }> = [
   { value: 'color', label: '原色' },
   { value: 'grayscale', label: '灰度' },
   { value: 'bw', label: '黑白' },
+]
+const sharpening: Array<{ value: SharpenStrength; label: string }> = [
+  { value: 'off', label: '关闭' }, { value: 'mild', label: '轻度' }, { value: 'strong', label: '强力' },
 ]
 const cloudNames = { dewarp: '服务器展平', deshadow: '深阴影处理' }
 
@@ -44,6 +48,8 @@ interface ScanPage {
   enhance: boolean
   denoise: boolean
   dewarp: boolean
+  sharpen: SharpenStrength
+  decorations?: ImageDecorations
   revision: number
   previewRevision?: number
   renderingRevision?: number
@@ -124,6 +130,9 @@ interface ScannerData {
   enhance: boolean
   denoise: boolean
   dewarp: boolean
+  sharpen: SharpenStrength
+  sharpening: typeof sharpening
+  hasMosaic: boolean
   cropOpen: boolean
   cropWidth: number
   cropHeight: number
@@ -188,7 +197,7 @@ interface ScannerActions {
   failPreviewLoad(event: WechatMiniprogram.BaseEvent): void
   releaseUnusedImages(): void
   refreshPreview(): Promise<void>
-  invalidate(page: ScanPage): void
+  invalidate(page: ScanPage, keepEnhanced?: boolean): void
   selectPage(event: WechatMiniprogram.TouchEvent): void
   activatePage(index: number, scrollToPage?: boolean): void
   changePage(event: WechatMiniprogram.TouchEvent): void
@@ -219,6 +228,10 @@ interface ScannerActions {
   toggleEnhance(event: WechatMiniprogram.SwitchChange): void
   toggleDenoise(event: WechatMiniprogram.SwitchChange): void
   toggleDewarp(event: WechatMiniprogram.SwitchChange): void
+  selectSharpen(event: WechatMiniprogram.TouchEvent): void
+  openDecorations(): Promise<void>
+  openSmartTools(): void
+  openArchive(): void
   applyEnhancementToAll(): void
   selectPreview(event: WechatMiniprogram.TouchEvent): void
   removePage(event: WechatMiniprogram.TouchEvent): void
@@ -296,15 +309,54 @@ function renderOptions(page: ScanPage): Omit<ExportPage, 'enhanced' | 'preview'>
     enhance: page.enhance,
     denoise: page.denoise,
     dewarp: page.dewarp,
+    sharpen: page.sharpen,
+    decorations: page.decorations,
   }
 }
 
 function previewRenderRotation(page: ScanPage): Rotation {
-  return page.dewarp ? page.rotation : 0
+  return page.enhanced || page.dewarp || hasDecorations(page) ? page.rotation : 0
 }
 
 function hasCurrentPreview(page: ScanPage): boolean {
   return page.previewRevision === page.revision && page.preview?.rotation === previewRenderRotation(page)
+}
+
+function hasMosaic(page: ScanPage): boolean {
+  return Boolean(page.decorations?.mosaics?.length)
+}
+
+function hasDecorations(page: ScanPage): boolean {
+  return hasMosaic(page) || Boolean(page.decorations?.watermarks?.length)
+}
+
+function needsDecoratedEnhancement(page: ScanPage): boolean {
+  return page.sharpen !== 'off' || hasDecorations(page)
+}
+
+function showMosaicReview(): void {
+  notify('请先移除马赛克，调整后再重新标记。')
+}
+
+function rotateDecorations(decorations: ImageDecorations, angle: Rotation): ImageDecorations {
+  if (angle === 0) return decorations
+  function point(x: number, y: number): [number, number] {
+    if (angle === 90) return [1 - y, x]
+    if (angle === 180) return [1 - x, 1 - y]
+    return [y, 1 - x]
+  }
+  return {
+    mosaics: decorations.mosaics?.map((region) => {
+      const a = point(region.x, region.y)
+      const b = point(region.x + region.width, region.y + region.height)
+      return { ...region, x: Math.min(a[0], b[0]), y: Math.min(a[1], b[1]), width: Math.abs(a[0] - b[0]), height: Math.abs(a[1] - b[1]) }
+    }),
+    watermarks: decorations.watermarks?.map((watermark) => {
+      const [x, y] = point(watermark.x ?? 0.5, watermark.y ?? 0.5)
+      const rotation = ((watermark.angle + angle + 180) % 360 + 360) % 360 - 180
+      return { ...watermark, x, y, angle: rotation }
+    }),
+  }
 }
 
 function ocrImageMode(page: ScanPage): 'color' | 'grayscale' {
@@ -312,8 +364,8 @@ function ocrImageMode(page: ScanPage): 'color' | 'grayscale' {
 }
 
 function ocrInputKey(page: ScanPage): string {
-  if (page.enhanced) return JSON.stringify([page.enhanced])
-  return JSON.stringify([page.source, page.corners, page.rotation, ocrImageMode(page), page.enhance, page.dewarp])
+  if (page.enhanced) return JSON.stringify([page.enhanced, page.sharpen, page.decorations])
+  return JSON.stringify([page.source, page.corners, page.rotation, ocrImageMode(page), page.enhance, page.dewarp, page.sharpen, page.decorations])
 }
 
 function scrollProgress(offset: number, maxOffset: number): number {
@@ -325,6 +377,7 @@ Page<ScannerData, ScannerActions>({
     pages: [], pageCount: 0, selected: 0, source: '', previewLayers: [], previewHeight: 0,
     showOriginal: false, hasEnhanced: false, autoDetected: false, partialDetected: false,
     cornerConfidences: [0, 0, 0, 0], mode: 'color', enhance: true, denoise: true, dewarp: false,
+    sharpen: 'off', sharpening, hasMosaic: false,
     cropOpen: false, cropWidth: 0, cropHeight: 0, cropRotation: 0, corners: fullImageCorners, modes,
     deleteArmed: -1, dragId: -1, dragFrom: -1, dragTarget: -1, dragNeighborShift: 0, dragSettling: false, dragGhost: null,
     swapFrom: -1, swapTo: -1, swapShift: 0,
@@ -409,7 +462,7 @@ Page<ScannerData, ScannerActions>({
             id: this.currentId++, source: input.imagePath, width: input.width, height: input.height,
             corners: copyCorners(detected ?? fullImageCorners), autoDetected: Boolean(detected),
             cornerConfidences: detected ? result?.cornerConfidences ?? [0, 0, 0, 0] : [0, 0, 0, 0],
-            rotation: 0, mode: 'color', enhance: true, denoise: true, dewarp: false, revision: 0,
+            rotation: 0, mode: 'color', enhance: true, denoise: true, dewarp: false, sharpen: 'off', revision: 0,
           })
         } catch {
           rejected += 1
@@ -441,16 +494,21 @@ Page<ScannerData, ScannerActions>({
 
   galleryPages() {
     return this.scans.map((page) => {
-      const swapSides = page.rotation === 90 || page.rotation === 270
-      const imageWidth = swapSides ? page.height : page.width
-      const imageHeight = swapSides ? page.width : page.height
+      const protectedPage = hasMosaic(page)
+      const preview = protectedPage && hasCurrentPreview(page) ? page.preview : undefined
+      const rotation = protectedPage ? 0 : page.rotation
+      const sourceWidth = preview?.width ?? page.width
+      const sourceHeight = preview?.height ?? page.height
+      const swapSides = rotation === 90 || rotation === 270
+      const imageWidth = swapSides ? sourceHeight : sourceWidth
+      const imageHeight = swapSides ? sourceWidth : sourceHeight
       const scale = Math.min(TILE_PHOTO_WIDTH * this.rpx / imageWidth, TILE_PHOTO_HEIGHT * this.rpx / imageHeight)
       const width = imageWidth * scale
       const height = imageHeight * scale
       return {
-        id: page.id, source: page.source, width, height,
-        photoStyle: `width:${page.width * scale}px;height:${page.height * scale}px;transform:translate(-50%,-50%) rotate(${page.rotation}deg)`,
-        lines: edgeStyles(orientCorners(page.corners, page.rotation), width, height).map((style, id) => ({ id, style })),
+        id: page.id, source: protectedPage ? preview?.imagePath ?? '' : page.source, width, height,
+        photoStyle: `width:${sourceWidth * scale}px;height:${sourceHeight * scale}px;transform:translate(-50%,-50%) rotate(${rotation}deg)`,
+        lines: protectedPage ? [] : edgeStyles(orientCorners(page.corners, rotation), width, height).map((style, id) => ({ id, style })),
       }
     })
   },
@@ -484,6 +542,8 @@ Page<ScannerData, ScannerActions>({
       enhance: page?.enhance ?? true,
       denoise: page?.denoise ?? true,
       dewarp: page?.dewarp ?? false,
+      sharpen: page?.sharpen ?? 'off',
+      hasMosaic: Boolean(page && hasMosaic(page)),
       ocrText: page?.ocr?.text ?? '',
       ocrMessage: page?.ocr?.message ?? '',
     })
@@ -509,8 +569,17 @@ Page<ScannerData, ScannerActions>({
       this.display()
       return
     }
-    if (this.data.showOriginal || page.enhanced) {
+    const protectedPage = hasMosaic(page)
+    if (protectedPage && !hasCurrentPreview(page)) {
+      this.display()
+      return
+    }
+    if (!protectedPage && (this.data.showOriginal || (page.enhanced && !needsDecoratedEnhancement(page)))) {
       this.display(this.data.showOriginal ? page.source : page.enhanced)
+      return
+    }
+    if (!page.preview && page.enhanced && !protectedPage) {
+      this.display(page.enhanced)
       return
     }
     const preview = page.preview ?? { imagePath: page.source, width: page.width, height: page.height, rotation: 0 }
@@ -540,6 +609,9 @@ Page<ScannerData, ScannerActions>({
         used.add(page.source)
         if (page.preview) used.add(page.preview.imagePath)
         if (page.enhanced) used.add(page.enhanced)
+        for (const watermark of page.decorations?.watermarks ?? []) {
+          if (watermark.kind === 'image') used.add(watermark.imagePath)
+        }
       }
     }
     for (const path of this.generatedImages) {
@@ -551,19 +623,24 @@ Page<ScannerData, ScannerActions>({
 
   async refreshPreview() {
     const page = this.current()
-    if (!page || hasCurrentPreview(page) || page.renderingRevision !== undefined || page.enhanced || this.data.cropOpen) return
+    if (!page || hasCurrentPreview(page) || page.renderingRevision !== undefined || this.data.cropOpen) return
+    const enhanced = page.enhanced
+    if (enhanced && !needsDecoratedEnhancement(page)) return
     const revision = page.revision
     const rotation = previewRenderRotation(page)
     page.renderingRevision = revision
     try {
-      const result = await renderPage({ ...renderOptions(page), rotation, quality: 'preview' })
-      if (this.closed || !this.scans.includes(page) || revision !== page.revision || rotation !== previewRenderRotation(page)) {
-        removeFile(result.imagePath)
+      const result = enhanced
+        ? await decorateImage({ imagePath: enhanced, decorations: page.decorations ?? {}, sharpen: page.sharpen, quality: 'preview' })
+        : await renderPage({ ...renderOptions(page), rotation, quality: 'preview' })
+      if (this.closed || !this.scans.includes(page) || revision !== page.revision || enhanced !== page.enhanced || rotation !== previewRenderRotation(page)) {
+        if (result.imagePath !== enhanced) removeFile(result.imagePath)
         return
       }
-      this.generatedImages.add(result.imagePath)
+      if (result.imagePath !== enhanced) this.generatedImages.add(result.imagePath)
       page.preview = { ...result, rotation }
       page.previewRevision = revision
+      if (hasMosaic(page)) this.syncGallery()
       if (this.current() === page && !this.data.showOriginal && !this.data.cropOpen) this.paint()
       else this.releaseUnusedImages()
     } catch (error) {
@@ -573,19 +650,21 @@ Page<ScannerData, ScannerActions>({
       }
     } finally {
       page.renderingRevision = undefined
-      if (!this.closed && this.current() === page && (revision !== page.revision || rotation !== previewRenderRotation(page))) {
+      if (!this.closed && this.current() === page && (revision !== page.revision || enhanced !== page.enhanced || rotation !== previewRenderRotation(page))) {
         void this.refreshPreview()
       }
     }
   },
 
-  invalidate(page) {
+  invalidate(page, keepEnhanced = false) {
     page.revision += 1
-    page.enhanced = undefined
-    const previewLayers = this.data.showOriginal
+    if (!keepEnhanced) page.enhanced = undefined
+    const protectedPage = hasMosaic(page)
+    const previewLayers = protectedPage ? [] : this.data.showOriginal
       ? this.data.previewLayers
       : this.data.previewLayers.filter((layer) => layer.visible || layer.path === page.source)
-    this.setData({ candidate: '', deleteArmed: -1, previewLayers }, () => this.releaseUnusedImages())
+    this.setData({ candidate: '', deleteArmed: -1, previewLayers, showOriginal: !protectedPage && this.data.showOriginal }, () => this.releaseUnusedImages())
+    if (protectedPage) this.syncGallery()
     this.syncSelection()
     void this.refreshPreview()
   },
@@ -615,6 +694,10 @@ Page<ScannerData, ScannerActions>({
   openCrop() {
     const page = this.current()
     if (!page || this.data.busy || this.pageDrag || this.buttonSwap) return
+    if (hasMosaic(page)) {
+      showMosaicReview()
+      return
+    }
     const window = wx.getWindowInfo ? wx.getWindowInfo() : wx.getSystemInfoSync()
     const size = fitImage(page.width, page.height, window.windowWidth, window.windowHeight)
     const corners = copyCorners(page.corners)
@@ -662,7 +745,18 @@ Page<ScannerData, ScannerActions>({
   },
 
   rotatePage(page, rotation) {
+    if (hasMosaic(page) && (page.dewarp || page.enhanced)) {
+      showMosaicReview()
+      return
+    }
+    const angle = ((rotation - page.rotation + 360) % 360) as Rotation
     page.rotation = rotation
+    if (page.decorations && hasDecorations(page)) {
+      page.decorations = rotateDecorations(page.decorations, angle)
+      this.syncGallery()
+      this.invalidate(page)
+      return
+    }
     page.enhanced = undefined
     this.setData({ candidate: '', deleteArmed: -1 }, () => this.releaseUnusedImages())
     this.syncGallery()
@@ -676,6 +770,10 @@ Page<ScannerData, ScannerActions>({
     if (!page || this.data.busy || this.pageDrag || this.buttonSwap) return
     const cropChanged = page.corners.some((point, index) => point.x !== fullImageCorners[index].x || point.y !== fullImageCorners[index].y)
     if (!cropChanged && !page.autoDetected) return
+    if (cropChanged && hasMosaic(page)) {
+      showMosaicReview()
+      return
+    }
     page.corners = copyCorners(fullImageCorners)
     page.autoDetected = false
     page.cornerConfidences = [0, 0, 0, 0]
@@ -689,6 +787,10 @@ Page<ScannerData, ScannerActions>({
     const page = this.current()
     const mode = modes.find(({ value }) => value === event.currentTarget.dataset.mode)
     if (!page || !mode || mode.value === page.mode || this.data.busy) return
+    if (hasMosaic(page) && page.enhanced) {
+      showMosaicReview()
+      return
+    }
     page.mode = mode.value
     this.invalidate(page)
   },
@@ -696,6 +798,11 @@ Page<ScannerData, ScannerActions>({
   toggleEnhance(event) {
     const page = this.current()
     if (!page || this.data.busy) return
+    if (hasMosaic(page) && page.enhanced) {
+      showMosaicReview()
+      this.setData({ enhance: page.enhance })
+      return
+    }
     page.enhance = event.detail.value
     this.invalidate(page)
   },
@@ -703,6 +810,11 @@ Page<ScannerData, ScannerActions>({
   toggleDenoise(event) {
     const page = this.current()
     if (!page || this.data.busy) return
+    if (hasMosaic(page) && page.enhanced) {
+      showMosaicReview()
+      this.setData({ denoise: page.denoise })
+      return
+    }
     page.denoise = event.detail.value
     this.invalidate(page)
   },
@@ -710,6 +822,11 @@ Page<ScannerData, ScannerActions>({
   toggleDewarp(event) {
     const page = this.current()
     if (!page || this.data.busy || page.dewarp === event.detail.value) return
+    if (hasMosaic(page)) {
+      showMosaicReview()
+      this.setData({ dewarp: page.dewarp })
+      return
+    }
     page.dewarp = event.detail.value
     this.invalidate(page)
   },
@@ -718,26 +835,133 @@ Page<ScannerData, ScannerActions>({
     const current = this.current()
     if (!current || this.data.busy || this.scans.length < 2) return
     for (const page of this.scans) {
-      if (page.mode === current.mode && page.enhance === current.enhance && page.denoise === current.denoise && page.dewarp === current.dewarp) continue
-      page.mode = current.mode
-      page.enhance = current.enhance
-      page.denoise = current.denoise
-      page.dewarp = current.dewarp
+      const protectedPage = hasMosaic(page)
+      const preservesBase = protectedPage && Boolean(page.enhanced)
+      const mode = preservesBase ? page.mode : current.mode
+      const enhance = preservesBase ? page.enhance : current.enhance
+      const denoise = preservesBase ? page.denoise : current.denoise
+      const dewarp = protectedPage ? page.dewarp : current.dewarp
+      if (page.mode === mode && page.enhance === enhance && page.denoise === denoise && page.dewarp === dewarp && page.sharpen === current.sharpen) continue
+      page.mode = mode
+      page.enhance = enhance
+      page.denoise = denoise
+      page.dewarp = dewarp
+      page.sharpen = current.sharpen
       page.revision += 1
-      page.enhanced = undefined
+      if (!preservesBase) page.enhanced = undefined
       if (page.ocr && page.ocr.inputKey !== ocrInputKey(page)) page.ocr = undefined
     }
+    this.syncGallery()
     this.releaseUnusedImages()
     notify(`增强设置已应用到全部 ${this.scans.length} 页。`)
   },
 
   selectPreview(event) {
-    if (!this.current() || this.data.busy) return
+    const page = this.current()
+    if (!page || this.data.busy) return
     const showOriginal = event.currentTarget.dataset.view === 'original'
+    if (showOriginal && hasMosaic(page)) return
     if (this.data.showOriginal === showOriginal) return
     this.setData({ showOriginal })
     this.paint()
     if (!showOriginal) void this.refreshPreview()
+  },
+
+  selectSharpen(event) {
+    const page = this.current()
+    const level = sharpening.find(({ value }) => value === event.currentTarget.dataset.level)
+    if (!page || !level || this.data.busy || this.pageDrag || this.buttonSwap || page.sharpen === level.value) return
+    page.sharpen = level.value
+    this.invalidate(page, true)
+  },
+
+  async openDecorations() {
+    const page = this.current()
+    if (!page || this.data.busy || this.pageDrag || this.buttonSwap) return
+    this.setData({ busy: '正在准备编辑页面', deleteArmed: -1 })
+    const revision = page.revision
+    let temporary: string | undefined
+    let navigating = false
+    try {
+      let imagePath = page.enhanced
+      if (!imagePath || page.sharpen !== 'off') {
+        const result = imagePath
+          ? await decorateImage({ imagePath, decorations: {}, sharpen: page.sharpen, quality: 'preview' })
+          : await renderPage({ ...renderOptions(page), decorations: undefined, quality: 'preview' })
+        temporary = result.imagePath === imagePath ? undefined : result.imagePath
+        imagePath = result.imagePath
+      }
+      if (this.closed || this.current() !== page) {
+        if (temporary) removeFile(temporary)
+        return
+      }
+      const session: DecorateSession = {
+        imagePath, temporary: Boolean(temporary), allowMosaic: !page.dewarp || Boolean(page.enhanced), decorations: page.decorations,
+      }
+      navigating = true
+      wx.navigateTo({
+        url: '/pages/decorate/index',
+        success: ({ eventChannel }) => {
+          eventChannel.on?.('decorateApply', (edits: DecorationEdits) => {
+            if (this.closed || this.current() !== page || page.revision !== revision) return
+            if (!session.allowMosaic && edits.decorations.mosaics?.length) return
+            for (const path of edits.ownedLogos) this.generatedImages.add(path)
+            page.decorations = edits.decorations
+            this.invalidate(page, true)
+            this.syncGallery()
+            eventChannel.emit('decorateAccepted', edits.ownedLogos)
+          })
+          eventChannel.emit('decoratePage', session)
+        },
+        fail: () => {
+          if (temporary) removeFile(temporary)
+          notify('无法打开编辑，请重试。')
+        },
+        complete: () => { if (!this.closed) this.setData({ busy: '' }) },
+      })
+    } catch (error) {
+      navigating = false
+      if (temporary) removeFile(temporary)
+      if (!this.closed) notify(errorText(error, '无法准备编辑页面。'))
+    } finally {
+      if (!this.closed && !navigating) this.setData({ busy: '' })
+    }
+  },
+
+  openSmartTools() {
+    const page = this.current()
+    if (!page || this.data.busy || this.pageDrag || this.buttonSwap) return
+    const revision = page.revision
+    const rotation = page.rotation
+    const number = this.selectedPage + 1
+    const snapshot: ExportPage = { ...renderOptions(page), corners: copyCorners(page.corners), enhanced: page.enhanced, preview: hasCurrentPreview(page) ? page.preview : undefined }
+    this.setData({ busy: '正在打开智能工具', deleteArmed: -1 })
+    wx.navigateTo({
+      url: '/pages/smart/index',
+      success: ({ eventChannel }) => {
+        eventChannel.on?.('smartAdopt', ({ imagePath }: { imagePath: string }) => {
+          if (this.closed || this.current() !== page || page.revision !== revision || page.rotation !== rotation || hasDecorations(page)) return
+          this.generatedImages.add(imagePath)
+          page.enhanced = imagePath
+          page.sharpen = 'off'
+          this.invalidate(page, true)
+          this.paint()
+          eventChannel.emit('smartAdopted', { imagePath })
+        })
+        eventChannel.emit('smartPage', { page: snapshot, number })
+      },
+      fail: () => notify('无法打开智能工具，请重试。'),
+      complete: () => { if (!this.closed) this.setData({ busy: '' }) },
+    })
+  },
+
+  openArchive() {
+    if (this.data.busy || this.pageDrag || this.buttonSwap) return
+    this.setData({ busy: '正在打开错题归档' })
+    wx.navigateTo({
+      url: '/pages/smart/index?archive=1', fail: () => notify('无法打开错题归档，请重试。'),
+      complete: () => { if (!this.closed) this.setData({ busy: '' }) },
+    })
   },
 
   onThumbnailsScroll(event) {
@@ -1048,11 +1272,13 @@ Page<ScannerData, ScannerActions>({
     let generated: string | undefined
     try {
       let filePath = page.enhanced
-      if (!filePath) {
+      if (!filePath || needsDecoratedEnhancement(page)) {
         const options = exportQualities[1]
-        const result = await renderPage({ ...renderOptions(page), ...options, quality: 'export' })
+        const result = filePath
+          ? await decorateImage({ imagePath: filePath, decorations: page.decorations ?? {}, sharpen: page.sharpen, ...options, quality: 'export' })
+          : await renderPage({ ...renderOptions(page), ...options, quality: 'export' })
+        if (result.imagePath !== filePath) generated = result.imagePath
         filePath = result.imagePath
-        generated = filePath
       }
       if (this.closed) return
       await new Promise<void>((resolve, reject) => {
@@ -1100,11 +1326,13 @@ Page<ScannerData, ScannerActions>({
     try {
       let imagePath = page.enhanced
       if (imagePath) this.ocrBorrowedInputs.set(turn, imagePath)
-      else {
+      if (!imagePath || needsDecoratedEnhancement(page)) {
         const options = exportQualities[1]
-        const result = await renderPage({ ...renderOptions(page), ...options, mode: ocrImageMode(page), denoise: false, quality: 'export' })
-        generated = result.imagePath
-        imagePath = generated
+        const result = imagePath
+          ? await decorateImage({ imagePath, decorations: page.decorations ?? {}, sharpen: page.sharpen, ...options, quality: 'export' })
+          : await renderPage({ ...renderOptions(page), ...options, mode: ocrImageMode(page), denoise: false, quality: 'export' })
+        if (result.imagePath !== imagePath) generated = result.imagePath
+        imagePath = result.imagePath
       }
       if (cancelled()) return
       this.setData({ busy: '正在上传识别图片' })
@@ -1158,12 +1386,16 @@ Page<ScannerData, ScannerActions>({
     const operation: unknown = event.currentTarget.dataset.operation
     const page = this.current()
     if (!cloudEnabled || !page || this.data.busy || (operation !== 'dewarp' && operation !== 'deshadow')) return
+    if (hasMosaic(page)) {
+      showMosaicReview()
+      return
+    }
     wx.showModal({
       title: cloudNames[operation],
       content: '此选项会将当前页面上传到处理服务器。处理结束后可预览并决定是否采用。',
       confirmText: '上传处理',
       success: ({ confirm }) => {
-        if (confirm && !this.closed && this.current() === page && !this.data.busy) {
+        if (confirm && !this.closed && this.current() === page && !this.data.busy && !hasMosaic(page)) {
           void this.enhanceCloud(page, operation)
         }
       },
@@ -1178,7 +1410,7 @@ Page<ScannerData, ScannerActions>({
     const cancelled = () => this.closed || turn !== this.cloudTurn || this.current() !== page || page.revision !== revision
     try {
       const result = await renderPage({
-        ...renderOptions(page), mode: 'color', enhance: false, denoise: false, dewarp: false,
+        ...renderOptions(page), mode: 'color', enhance: false, denoise: false, dewarp: false, sharpen: 'off', decorations: undefined,
         quality: 'export', maxDimension: 2048, jpegQuality: 0.9,
       })
       input = result.imagePath
@@ -1217,10 +1449,10 @@ Page<ScannerData, ScannerActions>({
 
   useCandidate() {
     const page = this.current()
-    if (!page || !this.data.candidate || this.data.busy) return
+    if (!page || !this.data.candidate || this.data.busy || hasMosaic(page)) return
     page.enhanced = this.data.candidate
-    this.setData({ candidate: '' }, () => this.releaseUnusedImages())
-    this.syncSelection(true)
+    this.setData({ showOriginal: false })
+    this.invalidate(page, true)
     this.paint()
   },
 

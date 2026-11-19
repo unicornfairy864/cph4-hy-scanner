@@ -1,4 +1,4 @@
-import type { ImageMode, Quad, Rotation } from '../../image'
+import type { ImageDecorations, ImageMode, Quad, Rotation, SharpenStrength } from '../../image'
 
 export const exportQualities = [
   { label: '标准', maxDimension: 1600, jpegQuality: 0.8 },
@@ -20,6 +20,8 @@ export interface ExportPage {
   enhance: boolean
   denoise: boolean
   dewarp: boolean
+  sharpen?: SharpenStrength
+  decorations?: ImageDecorations
   enhanced?: string
   preview?: PreviewImage
 }
