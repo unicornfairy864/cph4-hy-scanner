@@ -19,6 +19,7 @@ interface DrawGesture {
   first: { clientX: number; clientY: number }
   bounds?: { left: number; top: number }
   previous?: MosaicRegion
+  resize: boolean
 }
 
 interface EditorData {
@@ -30,7 +31,7 @@ interface EditorData {
   tool: Tool
   mosaics: EditorMosaic[]
   selectedMosaic: number
-  draftMosaic?: MosaicRegion
+  draftMosaic: MosaicRegion | null
   mosaicSize: number
   kind: MarkKind
   layout: 'single' | 'tile'
@@ -81,6 +82,7 @@ interface EditorActions {
 }
 
 const colors = ['#ffffff', '#293338', '#a63238', '#2b6759']
+const defaultColor = colors[1]
 let logoSequence = 0
 let mosaicSequence = 0
 
@@ -139,8 +141,8 @@ function failure(message: string): void {
 Page<EditorData, EditorActions>({
   data: {
     ready: false, allowMosaic: true, preview: '', width: 0, height: 0, tool: 'mosaic',
-    mosaics: [], selectedMosaic: -1, mosaicSize: 3, kind: 'none', layout: 'single',
-    text: '', logo: '', color: colors[0], opacity: 45, size: 12, angle: -30, spacing: 10,
+    mosaics: [], selectedMosaic: -1, draftMosaic: null, mosaicSize: 3, kind: 'none', layout: 'single',
+    text: '', logo: '', color: defaultColor, opacity: 45, size: 12, angle: -30, spacing: 10,
     stagger: true, position: { x: 0.5, y: 0.5 }, busy: '', error: '', applying: false,
   },
   ownedLogos: new Set(),
@@ -179,7 +181,7 @@ Page<EditorData, EditorActions>({
         kind: watermark?.kind ?? 'none', layout: watermark?.layout ?? 'single',
         text: watermark?.kind === 'text' ? watermark.text : '',
         logo: watermark?.kind === 'image' ? watermark.imagePath : '',
-        color: watermark?.kind === 'text' ? watermark.color ?? colors[0] : colors[0],
+        color: watermark?.kind === 'text' ? watermark.color ?? defaultColor : defaultColor,
         opacity: Math.round((watermark?.opacity ?? 0.45) * 100), size: Math.round((watermark?.size ?? 0.12) * 100),
         angle: watermark?.angle ?? -30, spacing: Math.round((watermark?.spacing ?? 0.1) * 100),
         stagger: watermark?.stagger ?? true,
@@ -269,7 +271,7 @@ Page<EditorData, EditorActions>({
     const fromMask = event.target.dataset.mask
     const index = fromMask === undefined || this.data.tool !== 'mosaic' ? -1 : Number(fromMask)
     const previous = this.data.mosaics[index]
-    const gesture: DrawGesture = { touchId: touch.identifier, index, first: touch, previous }
+    const gesture: DrawGesture = { touchId: touch.identifier, index, first: touch, previous, resize: Boolean(event.target.dataset.resize) }
     this.gesture = gesture
     if (previous) this.setData({ selectedMosaic: index, mosaicSize: Math.round((previous.blockSize ?? 0.025) * 100) })
     this.createSelectorQuery().select('.decorate-stage').boundingClientRect((bounds) => {
@@ -291,9 +293,16 @@ Page<EditorData, EditorActions>({
     const first = imageBounds(this.data, gesture, gesture.first.clientX, gesture.first.clientY)
     if (!first) return
     const previous = gesture.previous
-    const draft: MosaicRegion = previous
-      ? { ...previous, x: clamp(previous.x + last.x - first.x, 0, 1 - previous.width), y: clamp(previous.y + last.y - first.y, 0, 1 - previous.height) }
-      : { x: Math.min(first.x, last.x), y: Math.min(first.y, last.y), width: Math.abs(last.x - first.x), height: Math.abs(last.y - first.y), blockSize: this.data.mosaicSize / 100 }
+    const dx = last.x - first.x
+    const dy = last.y - first.y
+    let draft: MosaicRegion
+    if (!previous) {
+      draft = { x: Math.min(first.x, last.x), y: Math.min(first.y, last.y), width: Math.abs(dx), height: Math.abs(dy), blockSize: this.data.mosaicSize / 100 }
+    } else if (gesture.resize) {
+      draft = { ...previous, width: clamp(previous.width + dx, 0.01, 1 - previous.x), height: clamp(previous.height + dy, 0.01, 1 - previous.y) }
+    } else {
+      draft = { ...previous, x: clamp(previous.x + dx, 0, 1 - previous.width), y: clamp(previous.y + dy, 0, 1 - previous.height) }
+    }
     this.setData({ draftMosaic: draft })
   },
 
@@ -311,7 +320,7 @@ Page<EditorData, EditorActions>({
       return
     }
     const region = this.data.draftMosaic
-    this.setData({ draftMosaic: undefined })
+    this.setData({ draftMosaic: null })
     if (!region || region.width < 0.01 || region.height < 0.01) return
     const mosaics = this.data.mosaics.slice()
     const index = gesture.index < 0 ? mosaics.length : gesture.index
@@ -326,7 +335,7 @@ Page<EditorData, EditorActions>({
 
   cancelGesture() {
     this.gesture = undefined
-    this.setData({ draftMosaic: undefined })
+    this.setData({ draftMosaic: null })
   },
 
   selectMosaic(event) {

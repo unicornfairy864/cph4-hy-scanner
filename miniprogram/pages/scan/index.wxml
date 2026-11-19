@@ -13,7 +13,10 @@
       <button class="primary" bindtap="takePhoto" disabled="{{!!busy}}">拍照扫描</button>
       <button class="secondary" bindtap="showImportOptions" disabled="{{!!busy}}">导入图片</button>
     </view>
-    <button class="secondary full-width" bindtap="openArchive" disabled="{{!!busy}}">错题归档</button>
+    <view class="button-row welcome-tools">
+      <button class="secondary" bindtap="openArchive" disabled="{{!!busy}}">错题归档</button>
+      <button class="secondary" bindtap="openPdfSigning" disabled="{{!!busy}}">签署已有 PDF</button>
+    </view>
   </view>
 
   <view class="workspace {{cropOpen || !pageCount ? 'workspace-hidden' : ''}}">

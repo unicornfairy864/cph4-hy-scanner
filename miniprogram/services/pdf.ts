@@ -1,8 +1,10 @@
-import { LineCapStyle, PDFDocument, rgb } from 'pdf-lib'
+import { EncryptedPDFError, LineCapStyle, PDFAcroSignature, PDFDocument, PDFName, rgb } from 'pdf-lib'
 import type { PDFPage } from 'pdf-lib'
 
 const A4_SHORT = 595.28
 const A4_LONG = 841.89
+export const maxSigningPdfBytes = 10 * 1024 * 1024
+const maxSigningPdfPages = 50
 
 interface Point {
   x: number
@@ -76,10 +78,13 @@ export function signatureRectangle({ ink, center }: PageSignature, pageWidth: nu
   }
 }
 
-function drawSignature(page: PDFPage, signature: PageSignature, width: number, height: number): void {
+function drawSignature(
+  page: PDFPage, signature: PageSignature, width: number, height: number,
+  toPdf: (point: Point) => Point = ({ x, y }) => ({ x, y: height - y }),
+): void {
   const rect = signatureRectangle(signature, width, height)
   const color = rgb(0.08, 0.13, 0.12)
-  const coordinates = ({ x, y }: Point) => ({ x: rect.left + x * rect.width, y: height - rect.top - y * rect.height })
+  const coordinates = ({ x, y }: Point) => toPdf({ x: rect.left + x * rect.width, y: rect.top + y * rect.height })
   for (const stroke of signature.ink.strokes) {
     if (stroke.length === 1) {
       page.drawCircle({ ...coordinates(stroke[0]), size: rect.thickness / 2, color })
@@ -119,13 +124,82 @@ export async function createScanPdf(
   return document.save({ objectsPerTick: 20, useObjectStreams: false })
 }
 
-export function readImageBytes(filePath: string): Promise<Uint8Array> {
+async function loadSigningPdf(bytes: Uint8Array): Promise<PDFDocument> {
+  if (bytes.byteLength > maxSigningPdfBytes) throw new Error('请选择 10 MB 以内的 PDF')
+  let document: PDFDocument
+  try {
+    document = await PDFDocument.load(bytes, { updateMetadata: false, throwOnInvalidObject: true })
+  } catch (error) {
+    if (error instanceof EncryptedPDFError
+      || (error instanceof Error && error.message.startsWith('Input document to `PDFDocument.load` is encrypted.'))) {
+      throw new Error('无法签署加密 PDF')
+    }
+    throw new Error('无法读取此 PDF，请检查文件是否完整')
+  }
+  if (!document.getPageCount() || document.getPageCount() > maxSigningPdfPages) throw new Error('请选择 1 至 50 页的 PDF')
+  const digitalSignature = document.catalog.getAcroForm()?.getAllFields().some(
+    ([field]) => field instanceof PDFAcroSignature && field.dict.has(PDFName.of('V')),
+  )
+  if (digitalSignature || document.catalog.has(PDFName.of('Perms'))) throw new Error('此 PDF 已含数字签名或编辑限制')
+  return document
+}
+
+function visiblePage(page: PDFPage) {
+  const media = page.getMediaBox()
+  const crop = page.getCropBox()
+  const left = Math.max(media.x, crop.x)
+  const bottom = Math.max(media.y, crop.y)
+  const right = Math.min(media.x + media.width, crop.x + crop.width)
+  const top = Math.min(media.y + media.height, crop.y + crop.height)
+  const rawWidth = right - left
+  const rawHeight = top - bottom
+  const rotation = ((page.getRotation().angle % 360) + 360) % 360
+  if (!Number.isFinite(rawWidth) || rawWidth <= 0 || !Number.isFinite(rawHeight) || rawHeight <= 0 || rotation % 90 !== 0) {
+    throw new Error('无法读取此 PDF 的页面尺寸')
+  }
+  const quarterTurn = rotation === 90 || rotation === 270
+  return {
+    width: quarterTurn ? rawHeight : rawWidth,
+    height: quarterTurn ? rawWidth : rawHeight,
+    toPdf({ x, y }: Point): Point {
+      switch (rotation) {
+        case 90: return { x: left + y, y: bottom + x }
+        case 180: return { x: right - x, y: bottom + y }
+        case 270: return { x: right - y, y: top - x }
+        default: return { x: left + x, y: top - y }
+      }
+    },
+  }
+}
+
+export async function inspectSigningPdf(bytes: Uint8Array): Promise<Array<{ width: number; height: number }>> {
+  const document = await loadSigningPdf(bytes)
+  return document.getPages().map((page) => {
+    const { width, height } = visiblePage(page)
+    return { width, height }
+  })
+}
+
+export async function signExistingPdf(bytes: Uint8Array, signatures: ReadonlyMap<number, PageSignature>): Promise<Uint8Array> {
+  if (!signatures.size) throw new Error('请先在至少一页添加手写签名')
+  const document = await loadSigningPdf(bytes)
+  const pages = document.getPages()
+  for (const [index, signature] of signatures) {
+    const page = pages[index]
+    if (!page) continue
+    const bounds = visiblePage(page)
+    drawSignature(page, signature, bounds.width, bounds.height, bounds.toPdf)
+  }
+  return document.save({ objectsPerTick: 20, useObjectStreams: false, updateFieldAppearances: false })
+}
+
+export function readFileBytes(filePath: string): Promise<Uint8Array> {
   return new Promise((resolve, reject) => {
     wx.getFileSystemManager().readFile({
       filePath,
       success: ({ data }) => {
         if (typeof data === 'string') {
-          reject(new Error('无法读取扫描图片。'))
+          reject(new Error('无法读取文件。'))
           return
         }
         resolve(new Uint8Array(data))
@@ -134,6 +208,8 @@ export function readImageBytes(filePath: string): Promise<Uint8Array> {
     })
   })
 }
+
+export { readFileBytes as readImageBytes }
 
 export function writeScanPdf(filePath: string, bytes: Uint8Array): Promise<void> {
   let buffer: ArrayBuffer

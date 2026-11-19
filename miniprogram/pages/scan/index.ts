@@ -232,6 +232,7 @@ interface ScannerActions {
   openDecorations(): Promise<void>
   openSmartTools(): void
   openArchive(): void
+  openPdfSigning(): void
   applyEnhancementToAll(): void
   selectPreview(event: WechatMiniprogram.TouchEvent): void
   removePage(event: WechatMiniprogram.TouchEvent): void
@@ -841,14 +842,15 @@ Page<ScannerData, ScannerActions>({
       const enhance = preservesBase ? page.enhance : current.enhance
       const denoise = preservesBase ? page.denoise : current.denoise
       const dewarp = protectedPage ? page.dewarp : current.dewarp
-      if (page.mode === mode && page.enhance === enhance && page.denoise === denoise && page.dewarp === dewarp && page.sharpen === current.sharpen) continue
+      const baseChanged = page.mode !== mode || page.enhance !== enhance || page.denoise !== denoise || page.dewarp !== dewarp
+      if (!baseChanged && page.sharpen === current.sharpen) continue
       page.mode = mode
       page.enhance = enhance
       page.denoise = denoise
       page.dewarp = dewarp
       page.sharpen = current.sharpen
       page.revision += 1
-      if (!preservesBase) page.enhanced = undefined
+      if (baseChanged) page.enhanced = undefined
       if (page.ocr && page.ocr.inputKey !== ocrInputKey(page)) page.ocr = undefined
     }
     this.syncGallery()
@@ -960,6 +962,15 @@ Page<ScannerData, ScannerActions>({
     this.setData({ busy: '正在打开错题归档' })
     wx.navigateTo({
       url: '/pages/smart/index?archive=1', fail: () => notify('无法打开错题归档，请重试。'),
+      complete: () => { if (!this.closed) this.setData({ busy: '' }) },
+    })
+  },
+
+  openPdfSigning() {
+    if (this.data.busy || this.pageDrag || this.buttonSwap) return
+    this.setData({ busy: '正在打开 PDF 工具' })
+    wx.navigateTo({
+      url: '/pages/export/index', fail: () => notify('无法打开 PDF 工具，请重试。'),
       complete: () => { if (!this.closed) this.setData({ busy: '' }) },
     })
   },

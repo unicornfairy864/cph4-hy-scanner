@@ -16,7 +16,9 @@
           <image wx:if="{{preview}}" class="stage-image" src="{{preview}}" mode="scaleToFill" />
           <block wx:if="{{tool === 'mosaic'}}">
             <view wx:for="{{mosaics}}" wx:key="key" class="mask {{selectedMosaic === index ? 'mask-active' : ''}}" data-mask="{{index}}"
-              style="left:{{item.x * 100}}%;top:{{item.y * 100}}%;width:{{item.width * 100}}%;height:{{item.height * 100}}%" />
+              style="left:{{item.x * 100}}%;top:{{item.y * 100}}%;width:{{item.width * 100}}%;height:{{item.height * 100}}%">
+              <view wx:if="{{selectedMosaic === index}}" class="mask-resize" data-mask="{{index}}" data-resize="true" aria-label="调整区域大小" />
+            </view>
             <view wx:if="{{draftMosaic}}" class="mask mask-draft"
               style="left:{{draftMosaic.x * 100}}%;top:{{draftMosaic.y * 100}}%;width:{{draftMosaic.width * 100}}%;height:{{draftMosaic.height * 100}}%" />
           </block>
@@ -26,7 +28,7 @@
       </view>
       <view class="message" wx:if="{{error}}" aria-role="status">{{error}}</view>
       <view class="message" wx:elif="{{busy}}" aria-role="status">{{busy}}</view>
-      <view class="message" wx:elif="{{tool === 'mosaic'}}">拖出一个区域，或拖动已有区域调整位置。</view>
+      <view class="message" wx:elif="{{tool === 'mosaic'}}">拖出区域，或移动已有区域。选中后拖动右下角可改大小。</view>
       <view class="message" wx:elif="{{kind !== 'none' && layout === 'single'}}">点击或拖动预览设置水印位置。</view>
       <view class="message" wx:if="{{!allowMosaic}}">关闭本地书页展平后可添加马赛克。</view>
     </view>
