@@ -61,8 +61,10 @@ class ProviderConfig:
     model: str
 
     @classmethod
-    def from_env(cls) -> "ProviderConfig | None":
-        base_url, api_key, model = (os.environ.get(key, "").strip() for key in AI_ENVIRONMENT)
+    def from_env(
+        cls, environment: tuple[str, str, str] = AI_ENVIRONMENT, *, default_path: str = "/v1",
+    ) -> "ProviderConfig | None":
+        base_url, api_key, model = (os.environ.get(key, "").strip() for key in environment)
         if not base_url or not api_key or not model or len(model) > 200:
             return None
         try:
@@ -74,7 +76,7 @@ class ProviderConfig:
             _ = base.port
         except ValueError:
             return None
-        path = base.path.rstrip("/") or "/v1"
+        path = base.path.rstrip("/") or default_path
         if not path.endswith("/chat/completions"):
             path += "/chat/completions"
         return cls(urlunsplit((base.scheme, base.netloc, path, "", "")), api_key, model)
@@ -142,7 +144,7 @@ def normalize_document(raw: object, operation: str) -> dict:
     }
 
 
-def _image_data_url(source: Path, max_pixels: int) -> str:
+def prepare_vision_image(source: Path, max_pixels: int) -> str:
     try:
         with Image.open(source, formats=["JPEG"]) as photo:
             if photo.width * photo.height > max_pixels or max(photo.size) > 8192:
@@ -193,11 +195,15 @@ def extract_document(
                 {"type": "text", "text": TASK_PROMPTS[operation] + "字段 label 只能使用："
                  + "、".join(FIELD_LABELS[operation]) + "。"},
                 {"type": "image_url", "image_url": {
-                    "url": _image_data_url(source, pixel_limit), "detail": "high",
+                    "url": prepare_vision_image(source, pixel_limit), "detail": "high",
                 }},
             ]},
         ],
     }
+    return normalize_document(request_provider_json(request_data, config, client), operation)
+
+
+def request_provider_json(request_data: dict, config: ProviderConfig, client: httpx.Client) -> dict:
     headers = {"Authorization": f"Bearer {config.api_key}", "Accept-Encoding": "identity"}
     try:
         with client.stream("POST", config.endpoint, headers=headers, json=request_data,
@@ -213,7 +219,7 @@ def extract_document(
     except httpx.HTTPError:
         raise SmartError("Provider request failed") from None
 
-    return normalize_document(_provider_content(body), operation)
+    return _provider_content(body)
 
 
 def process_smart_document(
