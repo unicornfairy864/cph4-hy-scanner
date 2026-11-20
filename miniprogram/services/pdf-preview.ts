@@ -91,9 +91,10 @@ function imagePage(page: PDFPage): ImagePage | undefined {
   const resources = page.node.Resources()
   if (!resources || resources.has(PDFName.of('ColorSpace'))) return
   const images = resources.lookupMaybe(PDFName.of('XObject'), PDFDict)
-  const image = images?.lookupMaybe(PDFName.of(paint.image), PDFRawStream)
-  const colorSpace = image && name(image.dict, 'ColorSpace')
-  if (!image || image.dict.keys().some((key) => !imageKeys.has(key.asString()))
+  const image = images?.lookup(PDFName.of(paint.image))
+  if (!(image instanceof PDFRawStream)) return
+  const colorSpace = name(image.dict, 'ColorSpace')
+  if (image.dict.keys().some((key) => !imageKeys.has(key.asString()))
     || name(image.dict, 'Subtype') !== '/Image' || name(image.dict, 'Filter') !== '/DCTDecode'
     || number(image.dict, 'BitsPerComponent') !== 8
     || (colorSpace !== '/DeviceGray' && colorSpace !== '/DeviceRGB')) return

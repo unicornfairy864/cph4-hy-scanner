@@ -1,5 +1,5 @@
-import { EncryptedPDFError, LineCapStyle, PDFAcroSignature, PDFDocument, PDFName, rgb } from 'pdf-lib'
-import type { PDFPage } from 'pdf-lib'
+import { degrees, EncryptedPDFError, LineCapStyle, PDFAcroSignature, PDFDocument, PDFName, rgb } from 'pdf-lib'
+import type { PDFImage, PDFPage } from 'pdf-lib'
 
 const A4_SHORT = 595.28
 const A4_LONG = 841.89
@@ -17,9 +17,19 @@ export interface SignatureInk {
   strokes: Point[][]
 }
 
-export interface PageSignature {
-  ink: SignatureInk
-  center: Point
+export interface SignatureImage {
+  imagePath: string
+  bytes: Uint8Array
+  width: number
+  height: number
+  format: 'png' | 'jpg'
+}
+
+export type PageSignature = { center: Point } & ({ ink: SignatureInk } | { image: SignatureImage })
+
+export interface PdfPageRange {
+  start: number
+  end: number
 }
 
 interface Rectangle {
@@ -65,11 +75,18 @@ export function normalizeSignature(strokes: Point[][]): SignatureInk | undefined
   }
 }
 
-export function signatureRectangle({ ink, center }: PageSignature, pageWidth: number, pageHeight: number) {
+export function signatureImageFormat(bytes: Uint8Array): SignatureImage['format'] | undefined {
+  if ([137, 80, 78, 71, 13, 10, 26, 10].every((byte, index) => bytes[index] === byte)) return 'png'
+  if (bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255) return 'jpg'
+}
+
+export function signatureRectangle(signature: PageSignature, pageWidth: number, pageHeight: number) {
+  const { center } = signature
+  const art = 'ink' in signature ? signature.ink : signature.image
   const shortSide = Math.min(pageWidth, pageHeight)
-  const scale = Math.min(shortSide * 0.34 / ink.width, shortSide * 0.18 / ink.height)
-  const width = ink.width * scale
-  const height = ink.height * scale
+  const scale = Math.min(shortSide * 0.34 / art.width, shortSide * 0.18 / art.height)
+  const width = art.width * scale
+  const height = art.height * scale
   const thickness = shortSide * 0.003
   return {
     left: Math.max(thickness, Math.min(pageWidth - width - thickness, center.x * pageWidth - width / 2)),
@@ -78,11 +95,25 @@ export function signatureRectangle({ ink, center }: PageSignature, pageWidth: nu
   }
 }
 
-function drawSignature(
+async function drawSignature(
   page: PDFPage, signature: PageSignature, width: number, height: number,
+  embeddedImages: Map<SignatureImage, PDFImage>,
   toPdf: (point: Point) => Point = ({ x, y }) => ({ x, y: height - y }),
-): void {
+  rotation = 0,
+): Promise<void> {
   const rect = signatureRectangle(signature, width, height)
+  if ('image' in signature) {
+    const source = signature.image
+    let embedded = embeddedImages.get(source)
+    if (!embedded) {
+      const bytes = wholeByteView(source.bytes)
+      embedded = await (source.format === 'png' ? page.doc.embedPng(bytes) : page.doc.embedJpg(bytes))
+      embeddedImages.set(source, embedded)
+    }
+    const origin = toPdf({ x: rect.left, y: rect.top + rect.height })
+    page.drawImage(embedded, { ...origin, width: rect.width, height: rect.height, rotate: degrees(rotation) })
+    return
+  }
   const color = rgb(0.08, 0.13, 0.12)
   const coordinates = ({ x, y }: Point) => toPdf({ x: rect.left + x * rect.width, y: rect.top + y * rect.height })
   for (const stroke of signature.ink.strokes) {
@@ -98,6 +129,10 @@ function drawSignature(
   }
 }
 
+function wholeByteView(bytes: Uint8Array): Uint8Array {
+  return bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength ? bytes : Uint8Array.from(bytes)
+}
+
 export async function createScanPdf(
   count: number, render: (index: number) => Promise<Uint8Array>, signatureAt?: (index: number) => PageSignature | undefined,
 ): Promise<Uint8Array> {
@@ -106,11 +141,11 @@ export async function createScanPdf(
   }
 
   const document = await PDFDocument.create()
+  const embeddedImages = new Map<SignatureImage, PDFImage>()
   for (let index = 0; index < count; index += 1) {
     const bytes = await render(index)
     // pdf-lib reads the JPEG header from the backing buffer, starting at offset zero.
-    const jpeg = bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength ? bytes : Uint8Array.from(bytes)
-    const image = await document.embedJpg(jpeg)
+    const image = await document.embedJpg(wholeByteView(bytes))
     const { width, height, image: rect } = scanPdfLayout(image.width, image.height)
     const page = document.addPage([width, height])
     page.drawImage(image, {
@@ -118,7 +153,7 @@ export async function createScanPdf(
       width: rect.width, height: rect.height,
     })
     const signature = signatureAt?.(index)
-    if (signature) drawSignature(page, signature, width, height)
+    if (signature) await drawSignature(page, signature, width, height, embeddedImages)
   }
 
   return document.save({ objectsPerTick: 20, useObjectStreams: false })
@@ -161,6 +196,7 @@ function visiblePage(page: PDFPage) {
   return {
     width: quarterTurn ? rawHeight : rawWidth,
     height: quarterTurn ? rawWidth : rawHeight,
+    rotation,
     toPdf({ x, y }: Point): Point {
       switch (rotation) {
         case 90: return { x: left + y, y: bottom + x }
@@ -180,15 +216,33 @@ export async function inspectSigningPdf(bytes: Uint8Array): Promise<Array<{ widt
   })
 }
 
-export async function signExistingPdf(bytes: Uint8Array, signatures: ReadonlyMap<number, PageSignature>): Promise<Uint8Array> {
-  if (!signatures.size) throw new Error('请先在至少一页添加手写签名')
-  const document = await loadSigningPdf(bytes)
+export async function signExistingPdf(
+  bytes: Uint8Array, signatures: ReadonlyMap<number, PageSignature>, range?: PdfPageRange,
+): Promise<Uint8Array> {
+  if (!signatures.size) throw new Error('请先在至少一页添加签名')
+  const original = await loadSigningPdf(bytes)
+  const count = original.getPageCount()
+  const { start, end } = range ?? { start: 0, end: count }
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end > count || start >= end) {
+    throw new Error('请选择有效的 PDF 页码范围')
+  }
+  if (![...signatures.keys()].some((index) => index >= start && index < end)) {
+    throw new Error('请在所选范围内的至少一页添加签名')
+  }
+  let document = original
+  if (start !== 0 || end !== count) {
+    document = await PDFDocument.create()
+    const selectedPages = await document.copyPages(original, Array.from({ length: end - start }, (_, index) => start + index))
+    for (const page of selectedPages) document.addPage(page)
+  }
+  const embeddedImages = new Map<SignatureImage, PDFImage>()
   const pages = document.getPages()
-  for (const [index, signature] of signatures) {
+  for (let index = 0; index < pages.length; index += 1) {
+    const signature = signatures.get(start + index)
+    if (!signature) continue
     const page = pages[index]
-    if (!page) continue
     const bounds = visiblePage(page)
-    drawSignature(page, signature, bounds.width, bounds.height, bounds.toPdf)
+    await drawSignature(page, signature, bounds.width, bounds.height, embeddedImages, bounds.toPdf, bounds.rotation)
   }
   return document.save({ objectsPerTick: 20, useObjectStreams: false, updateFieldAppearances: false })
 }

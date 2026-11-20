@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { degrees, PDFDocument, PDFName } from 'pdf-lib'
+import { degrees, PDFDict, PDFDocument, PDFName } from 'pdf-lib'
 import { buildImagePdfPreview, readImagePdfPage } from '../miniprogram/services/pdf-preview'
 import { createScanPdf, scanPdfLayout } from '../miniprogram/services/pdf'
 
@@ -42,7 +42,7 @@ test('preserves translation and scale relative to the visible crop when the JPEG
   near(preview.height, 600 / 715)
 })
 
-test('declines pages with extra marks, annotations, rotation, clipped images, or more than one image', async () => {
+test('declines pages with extra marks, annotations, rotation, clipping, or unsupported image objects', async () => {
   const document = await PDFDocument.create()
   const image = await document.embedJpg(jpeg)
   const picture = () => {
@@ -58,6 +58,13 @@ test('declines pages with extra marks, annotations, rotation, clipped images, or
   annotated.node.set(PDFName.of('Annots'), document.context.obj([document.context.obj({
     Type: 'Annot', Subtype: 'Text', Rect: [100, 100, 120, 120],
   })]))
+  const invalidImage = picture()
+  const resources = invalidImage.node.Resources()
+  assert.ok(resources)
+  const xObjects = resources.lookup(PDFName.of('XObject'), PDFDict)
+  const [imageKey] = xObjects.keys()
+  assert.ok(imageKey)
+  xObjects.set(imageKey, document.context.obj({ Type: 'XObject', Subtype: 'Image' }))
   const bytes = await document.save()
   for (let i = 0; i < document.getPageCount(); i += 1) {
     assert.equal(await readImagePdfPage(bytes, i), undefined)

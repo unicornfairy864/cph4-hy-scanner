@@ -1,20 +1,24 @@
-import { decorateImage, renderPage } from '../../image'
+import { decorateImage, prepareImage, renderPage } from '../../image'
+import { cloudEnabled, maxCloudPdfPreviewBytes, runCloudPdfPreview } from '../../services/cloud'
 import {
   createScanPdf, fitRectangle, inspectSigningPdf, maxSigningPdfBytes, normalizeSignature, readFileBytes, readImageBytes,
-  scanPdfLayout, signExistingPdf, signatureRectangle, writeScanPdf,
+  scanPdfLayout, signExistingPdf, signatureImageFormat, signatureRectangle, writeScanPdf,
 } from '../../services/pdf'
 import type { PageSignature } from '../../services/pdf'
+import { buildImagePdfPreview } from '../../services/pdf-preview'
 import type { Rotation } from '../../image'
-import { fitRotatedImageStyle } from '../scan/geometry'
-import { exportQualities } from './session'
-import type { ExportPage, PdfSession, PreviewImage } from './session'
+import { fitRotatedImageStyle, fullImageCorners } from '../scan/geometry'
+import { exportPageRange, exportQualities } from './session'
+import type { ExportPage, ExportScope, PdfSession, PreviewImage } from './session'
 import { drawInkPoint, pointInPad, setupInkPad, signatureOverlay } from './signature'
 import type { InkCanvas, InkPad, SignaturePoint } from './signature'
 
 interface ExportData {
   selected: number
   pageCount: number
-  scope: 'all' | 'current'
+  scope: ExportScope
+  rangeStart: string
+  rangeEnd: string
   filename: string
   qualities: typeof exportQualities
   quality: number
@@ -25,11 +29,15 @@ interface ExportData {
   previewMessage: string
   previewFailed: boolean
   signatureStyle: string
+  signatureImage: string
   signatureSegments: ReturnType<typeof signatureOverlay>['segments']
   inkOpen: boolean
   hasInk: boolean
   existingPdfName: string
   hasScans: boolean
+  importedImages: boolean
+  cloudPreviewAvailable: boolean
+  cloudPreviewRunning: boolean
 }
 
 interface SheetSize {
@@ -47,12 +55,25 @@ interface ImportedPdf {
   path: string
   bytes: Uint8Array
   pages: SheetSize[]
+  retained?: string
+  retaining?: Promise<string>
+  users: number
+  discarded: boolean
+  images: Map<number, { path: string; style: string }>
+  attempted: Set<number>
+}
+
+interface ImportedImages {
+  session: PdfSession
+  owned: Set<string>
 }
 
 interface ScanDraft {
   selected: number
   scope: ExportData['scope']
   filename: string
+  rangeStart: string
+  rangeEnd: string
   signatures: Map<number, PageSignature>
 }
 
@@ -62,12 +83,16 @@ interface ExportActions {
   session?: PdfSession
   closed: boolean
   lastPdf?: string
-  previews: Map<number, PreviewImage>
+  previews: Map<ExportPage, PreviewImage>
   ownedPreviews: Set<string>
-  renderingPreviews: Set<number>
+  renderingPreviews: Set<ExportPage>
   signatures: Map<number, PageSignature>
   existingPdf?: ImportedPdf
+  imageDocument?: ImportedImages
   scanDraft?: ScanDraft
+  ownedSignatureImages: Set<string>
+  pdfPreviewTurn: number
+  confirmingCloudPreview: boolean
   sheet?: SheetSize
   signatureDrag?: SignatureDrag
   inkPad?: InkPad
@@ -83,10 +108,25 @@ interface ExportActions {
   setFilename(event: WechatMiniprogram.Input): void
   selectQuality(event: WechatMiniprogram.TouchEvent): void
   selectScope(event: WechatMiniprogram.TouchEvent): void
+  setRangeStart(event: WechatMiniprogram.Input): void
+  setRangeEnd(event: WechatMiniprogram.Input): void
+  documentSession(): PdfSession | undefined
   changePage(event: WechatMiniprogram.TouchEvent): void
   showPreview(): Promise<void>
+  failPreviewImage(event: WechatMiniprogram.BaseEvent): void
   chooseExistingPdf(): Promise<void>
-  openOriginalPdf(): void
+  openOriginalPdf(): Promise<void>
+  requestCloudPdfPreview(): void
+  previewPdfInCloud(source: ImportedPdf, index: number): Promise<void>
+  cancelCloudPdfPreview(): void
+  retainPdf(source: ImportedPdf): Promise<string>
+  storePdfPreview(source: ImportedPdf, index: number, preview: { path: string; style: string }): void
+  presentPdf(source: ImportedPdf, index: number): void
+  discardImported(): void
+  rememberScans(): void
+  chooseDocumentImages(): Promise<void>
+  chooseSignatureImage(): Promise<void>
+  releaseSignatureImages(): void
   restoreScanDraft(): void
   presentPreview(preview: PreviewImage): void
   syncSignature(): void
@@ -106,6 +146,8 @@ interface ExportActions {
 }
 
 const maxInkPoints = 800
+const maxSignatureImageBytes = 4 * 1024 * 1024
+const maxCachedPdfPreviews = 4
 
 function pageEdits(page: ExportPage): boolean {
   return Boolean(page.decorations?.mosaics?.length || page.decorations?.watermarks?.length || (page.sharpen && page.sharpen !== 'off'))
@@ -126,6 +168,28 @@ function choosePdf(): Promise<{ path: string; name: string; size: number } | und
       success: ({ tempFiles }) => resolve(tempFiles[0]),
       fail: (error) => error.errMsg.includes('cancel') ? resolve(undefined) : reject(new Error('无法选择 PDF 文件')),
     })
+  })
+}
+
+function chooseImages(count: number): Promise<Array<{ tempFilePath: string; size: number }>> {
+  return new Promise((resolve, reject) => {
+    wx.chooseMedia({
+      count, mediaType: ['image'], sourceType: ['album'], sizeType: ['original'],
+      success: ({ tempFiles }) => resolve(tempFiles),
+      fail: (error) => error.errMsg.includes('cancel') ? resolve([]) : reject(new Error('无法选择图片')),
+    })
+  })
+}
+
+function makeDirectory(dirPath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    wx.getFileSystemManager().mkdir({ dirPath, recursive: true, success: () => resolve(), fail: reject })
+  })
+}
+
+function openPdf(filePath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    wx.openDocument({ filePath, fileType: 'pdf', showMenu: true, success: () => resolve(), fail: reject })
   })
 }
 
@@ -156,15 +220,19 @@ function filename(input: string): string {
 
 Page<ExportData, ExportActions>({
   data: {
-    selected: 0, pageCount: 0, scope: 'all', filename: '', qualities: exportQualities, quality: 0, busy: '',
+    selected: 0, pageCount: 0, scope: 'all', rangeStart: '1', rangeEnd: '1', filename: '', qualities: exportQualities, quality: 0, busy: '',
     preview: '', previewStyle: '', sheetStyle: '', previewMessage: '', previewFailed: false,
-    signatureStyle: '', signatureSegments: [], inkOpen: false, hasInk: false, existingPdfName: '', hasScans: false,
+    signatureStyle: '', signatureImage: '', signatureSegments: [], inkOpen: false, hasInk: false,
+    existingPdfName: '', hasScans: false, importedImages: false, cloudPreviewAvailable: false, cloudPreviewRunning: false,
   },
   closed: false,
   previews: new Map(),
   ownedPreviews: new Set(),
   renderingPreviews: new Set(),
   signatures: new Map(),
+  ownedSignatureImages: new Set(),
+  pdfPreviewTurn: 0,
+  confirmingCloudPreview: false,
   draftInk: [],
   sampledPoints: 0,
   saveSequence: 0,
@@ -176,6 +244,7 @@ Page<ExportData, ExportActions>({
     this.ownedPreviews = new Set()
     this.renderingPreviews = new Set()
     this.signatures = new Map()
+    this.ownedSignatureImages = new Set()
     const window = wx.getWindowInfo ? wx.getWindowInfo() : wx.getSystemInfoSync()
     const rpx = window.windowWidth / 750
     this.frameWidth = window.windowWidth - 122 * rpx
@@ -183,21 +252,22 @@ Page<ExportData, ExportActions>({
     this.getOpenerEventChannel?.()?.on?.('scanExport', (session: PdfSession) => {
       if (this.closed) return
       this.session = session
-      this.setData({ selected: session.selected, pageCount: session.pages.length, hasScans: Boolean(session.pages.length) })
+      this.setData({ selected: session.selected, pageCount: session.pages.length, rangeEnd: String(session.pages.length), hasScans: Boolean(session.pages.length) })
       void this.showPreview()
     })
   },
 
   onUnload() {
     this.closed = true
+    this.discardImported()
     if (this.lastPdf) cleanPdf(this.lastPdf)
     for (const path of this.ownedPreviews) cleanImage(path)
     this.ownedPreviews.clear()
     this.previews.clear()
     this.signatures.clear()
     this.scanDraft?.signatures.clear()
+    this.releaseSignatureImages()
     this.scanDraft = undefined
-    this.existingPdf = undefined
     this.draftInk = []
     this.inkPad = undefined
     this.signatureDrag = undefined
@@ -214,63 +284,96 @@ Page<ExportData, ExportActions>({
 
   selectScope(event) {
     const scope: unknown = event.currentTarget.dataset.scope
-    if ((scope === 'all' || scope === 'current') && !this.data.busy) this.setData({ scope })
+    if (this.data.busy) return
+    if (scope === 'range' && this.data.scope !== 'range') this.setData({ scope, rangeStart: '1', rangeEnd: String(this.data.pageCount) })
+    else if (scope === 'all' || scope === 'current') this.setData({ scope })
   },
+
+  setRangeStart(event) { this.setData({ rangeStart: event.detail.value }) },
+
+  setRangeEnd(event) { this.setData({ rangeEnd: event.detail.value }) },
+
+  documentSession() { return this.imageDocument?.session ?? this.session },
 
   changePage(event) {
     const direction = Number(event.currentTarget.dataset.direction)
     if ((direction !== -1 && direction !== 1) || this.data.busy || this.data.inkOpen) return
     const selected = this.data.selected + direction
-    if (!(this.existingPdf?.pages ?? this.session?.pages)?.[selected]) return
+    if (!(this.existingPdf?.pages ?? this.documentSession()?.pages)?.[selected]) return
     this.signatureDrag = undefined
-    this.setData({ selected, preview: '', sheetStyle: '', signatureStyle: '', signatureSegments: [] })
+    this.setData({ selected, preview: '', sheetStyle: '', signatureStyle: '', signatureImage: '', signatureSegments: [] })
     void this.showPreview()
   },
 
   async showPreview() {
     const selected = this.data.selected
-    const importedPage = this.existingPdf?.pages[selected]
-    if (importedPage) {
-      const sheet = fitRectangle(importedPage.width, importedPage.height, this.frameWidth, this.frameHeight)
-      this.sheet = sheet
-      this.setData({
-        preview: '', previewStyle: '', previewFailed: false, previewMessage: '',
-        sheetStyle: `left:${sheet.left}px;top:${sheet.top}px;width:${sheet.width}px;height:${sheet.height}px`,
+    const imported = this.existingPdf
+    if (imported?.pages[selected]) {
+      this.presentPdf(imported, selected)
+      if (imported.attempted.has(selected)) return
+      imported.attempted.add(selected)
+      const preview = await buildImagePdfPreview(imported.bytes, selected)
+      if (!preview) return
+      if (this.closed || imported.discarded || imported.images.has(selected)) return cleanImage(preview.imagePath)
+      this.storePdfPreview(imported, selected, {
+        path: preview.imagePath,
+        style: `left:${preview.left * 100}%;top:${preview.top * 100}%;width:${preview.width * 100}%;height:${preview.height * 100}%;transform:none`,
       })
-      this.syncSignature()
+      if (this.existingPdf === imported && this.data.selected === selected) this.presentPdf(imported, selected)
       return
     }
-    const page = this.session?.pages[selected]
+    const page = this.documentSession()?.pages[selected]
     if (!page) return
-    const ready = this.previews.get(selected) ?? (page.enhanced ? undefined : page.preview)
+    const ready = this.previews.get(page) ?? (page.enhanced ? undefined : page.preview)
     if (ready) {
       this.presentPreview(ready)
       return
     }
-    if (this.renderingPreviews.has(selected)) return
+    if (this.renderingPreviews.has(page)) return
     this.sheet = undefined
     this.setData({ previewMessage: '正在生成页面预览', previewFailed: false })
-    this.renderingPreviews.add(selected)
+    this.renderingPreviews.add(page)
     try {
       const borrowed = page.enhanced && !pageEdits(page)
       const result = borrowed && page.enhanced
         ? { imagePath: page.enhanced, ...await imageSize(page.enhanced) }
         : await renderRaster(page, 'preview')
-      if (this.closed) {
+      if (this.closed || (!this.session?.pages.includes(page) && !this.imageDocument?.session.pages.includes(page))) {
         if (!borrowed) cleanImage(result.imagePath)
         return
       }
       if (!borrowed) this.ownedPreviews.add(result.imagePath)
       const preview = { ...result, rotation: page.rotation }
-      this.previews.set(selected, preview)
-      if (this.data.selected === selected && !this.existingPdf) this.presentPreview(preview)
+      this.previews.set(page, preview)
+      if (this.documentSession()?.pages[this.data.selected] === page && !this.existingPdf) this.presentPreview(preview)
     } catch {
-      if (!this.closed && this.data.selected === selected && !this.existingPdf) {
+      if (!this.closed && this.documentSession()?.pages[this.data.selected] === page && !this.existingPdf) {
         this.setData({ previewFailed: true, previewMessage: '无法生成页面预览' })
       }
     } finally {
-      this.renderingPreviews.delete(selected)
+      this.renderingPreviews.delete(page)
     }
+  },
+
+  failPreviewImage(event) {
+    const path: unknown = event.currentTarget.dataset.path
+    if (typeof path !== 'string' || path !== this.data.preview) return
+    const source = this.existingPdf
+    const index = this.data.selected
+    if (source) {
+      const preview = source.images.get(index)
+      if (preview?.path === path) {
+        source.images.delete(index)
+        cleanImage(path)
+        this.presentPdf(source, index)
+      }
+      return
+    }
+    const page = this.documentSession()?.pages[index]
+    if (page && this.previews.get(page)?.imagePath === path) this.previews.delete(page)
+    if (this.ownedPreviews.delete(path)) cleanImage(path)
+    this.sheet = undefined
+    this.setData({ preview: '', sheetStyle: '', previewFailed: true, previewMessage: '无法显示页面预览' })
   },
 
   async chooseExistingPdf() {
@@ -284,16 +387,19 @@ Page<ExportData, ExportActions>({
       const bytes = await readFileBytes(selected.path)
       const pages = await inspectSigningPdf(bytes)
       if (this.closed) return
-      if (!this.existingPdf && this.session?.pages.length) {
-        this.scanDraft = {
-          selected: this.data.selected, scope: this.data.scope, filename: this.data.filename, signatures: this.signatures,
-        }
-      }
-      this.existingPdf = { path: selected.path, bytes, pages }
+      this.rememberScans()
+      this.discardImported()
+      this.existingPdf = { path: selected.path, bytes, pages, users: 0, discarded: false, images: new Map(), attempted: new Set() }
       this.signatures = new Map()
+      this.releaseSignatureImages()
       this.sheet = undefined
-      const title = selected.name.replace(/\.pdf$/i, '')
-      this.setData({ selected: 0, scope: 'all', pageCount: pages.length, filename: `${title}-已签名`, existingPdfName: selected.name })
+      const name = selected.name || '原始 PDF'
+      const title = name.replace(/\.pdf$/i, '')
+      this.setData({
+        selected: 0, scope: 'all', pageCount: pages.length, rangeStart: '1', rangeEnd: String(pages.length),
+        filename: `${title}-已签名`, existingPdfName: name, importedImages: false,
+        cloudPreviewAvailable: cloudEnabled && bytes.byteLength <= maxCloudPdfPreviewBytes,
+      })
       void this.showPreview()
     } catch (error) {
       if (!this.closed) wx.showToast({ title: error instanceof Error ? error.message : '无法读取此 PDF', icon: 'none' })
@@ -302,30 +408,221 @@ Page<ExportData, ExportActions>({
     }
   },
 
-  openOriginalPdf() {
-    if (!this.existingPdf || this.data.busy) return
-    wx.openDocument({
-      filePath: this.existingPdf.path, fileType: 'pdf',
-      fail: () => wx.showToast({ title: '无法打开原 PDF', icon: 'none' }),
+  rememberScans() {
+    if (this.scanDraft || this.existingPdf || this.imageDocument || !this.session?.pages.length) return
+    const { selected, scope, filename, rangeStart, rangeEnd } = this.data
+    this.scanDraft = { selected, scope, filename, rangeStart, rangeEnd, signatures: this.signatures }
+  },
+
+  discardImported() {
+    this.pdfPreviewTurn += 1
+    const source = this.existingPdf
+    this.existingPdf = undefined
+    if (source) {
+      source.discarded = true
+      for (const { path } of source.images.values()) cleanImage(path)
+      source.images.clear()
+      if (!source.users && source.retained) cleanPdf(source.retained)
+    }
+    const images = this.imageDocument
+    this.imageDocument = undefined
+    if (images) {
+      for (const page of images.session.pages) {
+        const preview = this.previews.get(page)
+        if (preview && this.ownedPreviews.delete(preview.imagePath)) cleanImage(preview.imagePath)
+        this.previews.delete(page)
+      }
+      for (const path of images.owned) cleanImage(path)
+    }
+  },
+
+  async chooseDocumentImages() {
+    if (this.data.busy || this.data.inkOpen || this.signatureDrag) return
+    this.setData({ busy: '正在选择图片' })
+    const owned = new Set<string>()
+    let retained = false
+    try {
+      const inputs = await chooseImages(9)
+      if (!inputs.length || this.closed) return
+      const pages: ExportPage[] = []
+      let rejected = 0
+      for (let index = 0; index < inputs.length && !this.closed; index += 1) {
+        this.setData({ busy: `正在导入图片 · ${index + 1} / ${inputs.length}` })
+        try {
+          const path = inputs[index].tempFilePath
+          const prepared = await prepareImage({ imagePath: path })
+          if (prepared.imagePath !== path) owned.add(prepared.imagePath)
+          pages.push({
+            imagePath: prepared.imagePath, corners: fullImageCorners, rotation: 0, mode: 'color',
+            enhance: false, denoise: false, dewarp: false,
+            preview: { ...prepared, rotation: 0 },
+          })
+        } catch {
+          rejected += 1
+        }
+      }
+      if (this.closed) return
+      if (!pages.length) throw new Error('无法读取所选图片')
+      this.rememberScans()
+      this.discardImported()
+      this.imageDocument = { session: { pages, selected: 0 }, owned }
+      retained = true
+      this.signatures = new Map()
+      this.releaseSignatureImages()
+      this.sheet = undefined
+      this.setData({
+        selected: 0, scope: 'all', pageCount: pages.length, rangeStart: '1', rangeEnd: String(pages.length),
+        filename: '图片签名', existingPdfName: '', importedImages: true, cloudPreviewAvailable: false,
+      })
+      void this.showPreview()
+      if (rejected) wx.showToast({ title: `${rejected} 张图片无法读取`, icon: 'none' })
+    } catch (error) {
+      if (!this.closed) wx.showToast({ title: error instanceof Error ? error.message : '无法导入图片', icon: 'none' })
+    } finally {
+      if (!retained) for (const path of owned) cleanImage(path)
+      if (!this.closed) this.setData({ busy: '' })
+    }
+  },
+
+  async retainPdf(source) {
+    if (source.retained) return source.retained
+    if (source.retaining) return source.retaining
+    const dir = `${wx.env.USER_DATA_PATH}/pdf-source/${Date.now()}-${this.saveSequence++}`
+    const path = dir + '/original.pdf'
+    source.retaining = (async () => {
+      try {
+        await makeDirectory(dir)
+        await writeScanPdf(path, source.bytes)
+        source.retained = path
+        return path
+      } catch (error) {
+        cleanPdf(path)
+        throw error
+      } finally {
+        source.retaining = undefined
+      }
+    })()
+    return source.retaining
+  },
+
+  async openOriginalPdf() {
+    const source = this.existingPdf
+    if (!source || this.data.busy) return
+    this.setData({ busy: '正在打开原 PDF' })
+    source.users += 1
+    try {
+      try {
+        await openPdf(source.retained ?? source.path)
+      } catch {
+        const path = await this.retainPdf(source)
+        if (!this.closed && this.existingPdf === source) await openPdf(path)
+      }
+    } catch {
+      if (!this.closed) wx.showToast({ title: '无法打开原 PDF，请重新导入', icon: 'none' })
+    } finally {
+      source.users -= 1
+      if (!source.users && source.discarded && source.retained) cleanPdf(source.retained)
+      if (!this.closed) this.setData({ busy: '' })
+    }
+  },
+
+  requestCloudPdfPreview() {
+    const source = this.existingPdf
+    if (!source || !this.data.cloudPreviewAvailable || this.data.busy || this.confirmingCloudPreview) return
+    const index = this.data.selected
+    if (source.images.has(index)) return
+    this.confirmingCloudPreview = true
+    wx.showModal({
+      title: `云预览第 ${index + 1} 页`,
+      content: '将整份原 PDF 上传到本项目的云端，仅渲染当前页。只有同意后才上传。',
+      confirmText: '上传预览',
+      success: ({ confirm }) => {
+        if (confirm && !this.closed && this.existingPdf === source && this.data.selected === index && !this.data.busy) {
+          void this.previewPdfInCloud(source, index)
+        }
+      },
+      complete: () => { this.confirmingCloudPreview = false },
     })
+  },
+
+  async previewPdfInCloud(source, index) {
+    const turn = ++this.pdfPreviewTurn
+    const isCancelled = () => this.closed || turn !== this.pdfPreviewTurn || this.existingPdf !== source
+    source.users += 1
+    this.setData({ busy: '正在准备 PDF', cloudPreviewRunning: true })
+    try {
+      const filePath = await this.retainPdf(source)
+      if (isCancelled()) return
+      this.setData({ busy: '正在上传 PDF' })
+      const preview = await runCloudPdfPreview({
+        filePath, pageNumber: index + 1, isCancelled,
+        onStatus: (status) => {
+          if (!isCancelled()) this.setData({ busy: status === 'queued' ? '已上传，正在排队' : '正在生成云预览' })
+        },
+      })
+      if (isCancelled()) return cleanImage(preview.imagePath)
+      this.storePdfPreview(source, index, { path: preview.imagePath, style: 'left:0;top:0;width:100%;height:100%;transform:none' })
+      if (this.data.selected === index) this.presentPdf(source, index)
+    } catch (error) {
+      if (!isCancelled()) wx.showToast({ title: error instanceof Error ? error.message : '无法生成云预览，可查看原 PDF', icon: 'none' })
+    } finally {
+      source.users -= 1
+      if (!source.users && source.discarded && source.retained) cleanPdf(source.retained)
+      if (!isCancelled()) this.setData({ busy: '', cloudPreviewRunning: false })
+    }
+  },
+
+  cancelCloudPdfPreview() {
+    if (!this.data.cloudPreviewRunning) return
+    this.pdfPreviewTurn += 1
+    this.setData({ busy: '', cloudPreviewRunning: false })
+  },
+
+  storePdfPreview(source, index, preview) {
+    const previous = source.images.get(index)
+    if (previous && previous.path !== preview.path) cleanImage(previous.path)
+    source.images.delete(index)
+    source.images.set(index, preview)
+    if (source.images.size <= maxCachedPdfPreviews) return
+    for (const [oldIndex, oldPreview] of source.images) {
+      if (oldIndex === this.data.selected) continue
+      source.images.delete(oldIndex)
+      source.attempted.delete(oldIndex)
+      cleanImage(oldPreview.path)
+      break
+    }
+  },
+
+  presentPdf(source, index) {
+    const page = source.pages[index]
+    const preview = source.images.get(index)
+    const sheet = fitRectangle(page.width, page.height, this.frameWidth, this.frameHeight)
+    this.sheet = sheet
+    this.setData({
+      preview: preview?.path ?? '', previewStyle: preview?.style ?? '', previewFailed: false, previewMessage: '',
+      sheetStyle: `left:${sheet.left}px;top:${sheet.top}px;width:${sheet.width}px;height:${sheet.height}px`,
+    })
+    this.syncSignature()
   },
 
   restoreScanDraft() {
     const draft = this.scanDraft
     if (!draft || !this.session || this.data.busy || this.data.inkOpen || this.signatureDrag) return
-    this.existingPdf = undefined
+    this.discardImported()
     this.signatures = draft.signatures
     this.scanDraft = undefined
+    this.releaseSignatureImages()
     this.sheet = undefined
     this.setData({
       selected: draft.selected, scope: draft.scope, filename: draft.filename, pageCount: this.session.pages.length,
-      existingPdfName: '', sheetStyle: '', signatureStyle: '', signatureSegments: [],
+      rangeStart: draft.rangeStart, rangeEnd: draft.rangeEnd, importedImages: false, cloudPreviewAvailable: false,
+      existingPdfName: '', sheetStyle: '', signatureStyle: '', signatureImage: '', signatureSegments: [],
     })
     void this.showPreview()
   },
 
   presentPreview(preview) {
-    const page = this.session?.pages[this.data.selected]
+    const page = this.documentSession()?.pages[this.data.selected]
     if (!page || this.existingPdf) return
     const rotation = ((page.rotation - preview.rotation + 360) % 360) as Rotation
     const swapSides = rotation === 90 || rotation === 270
@@ -345,7 +642,59 @@ Page<ExportData, ExportActions>({
     const signature = this.signatures.get(this.data.selected)
     const sheet = this.sheet
     const overlay = signature && sheet && signatureOverlay(signature, sheet.width, sheet.height)
-    this.setData({ signatureStyle: overlay ? overlay.style : '', signatureSegments: overlay ? overlay.segments : [] })
+    this.setData({
+      signatureStyle: overlay?.style ?? '', signatureImage: overlay?.imagePath ?? '', signatureSegments: overlay?.segments ?? [],
+    })
+  },
+
+  async chooseSignatureImage() {
+    if (!this.sheet || this.data.busy || this.data.inkOpen || this.signatureDrag) return
+    const selectedPage = this.data.selected
+    this.setData({ busy: '正在选择签名图片' })
+    let generated: string | undefined
+    try {
+      const [input] = await chooseImages(1)
+      if (!input || this.closed) return
+      if (input.size > maxSignatureImageBytes) throw new Error('请选择 4 MB 以内的 PNG 或 JPG 签名图片')
+      const prepared = await prepareImage({ imagePath: input.tempFilePath })
+      if (prepared.imagePath !== input.tempFilePath) generated = prepared.imagePath
+      const bytes = await readFileBytes(prepared.imagePath)
+      if (this.closed) return
+      const format = signatureImageFormat(bytes)
+      if (!format || bytes.byteLength > maxSignatureImageBytes || prepared.width <= 0 || prepared.height <= 0
+        || prepared.width * prepared.height > 4_000_000) {
+        throw new Error('请选择 4 MB、400 万像素以内的 PNG 或 JPG 签名图片')
+      }
+      const previous = this.signatures.get(selectedPage)
+      this.signatures.set(selectedPage, { image: { ...prepared, bytes, format }, center: previous?.center ?? { x: 0.8, y: 0.88 } })
+      if (generated) {
+        this.ownedSignatureImages.add(generated)
+        generated = undefined
+      }
+      this.releaseSignatureImages()
+      this.syncSignature()
+    } catch (error) {
+      if (!this.closed) wx.showToast({ title: error instanceof Error ? error.message : '无法导入签名图片', icon: 'none' })
+    } finally {
+      if (generated) cleanImage(generated)
+      if (!this.closed) this.setData({ busy: '' })
+    }
+  },
+
+  releaseSignatureImages() {
+    const retained = new Set<string>()
+    for (const signatures of [this.signatures, this.scanDraft?.signatures]) {
+      if (!signatures) continue
+      for (const signature of signatures.values()) {
+        if ('image' in signature) retained.add(signature.image.imagePath)
+      }
+    }
+    for (const path of this.ownedSignatureImages) {
+      if (!retained.has(path)) {
+        this.ownedSignatureImages.delete(path)
+        cleanImage(path)
+      }
+    }
   },
 
   openInk() {
@@ -417,6 +766,7 @@ Page<ExportData, ExportActions>({
     const current = this.signatures.get(this.data.selected)
     this.signatures.set(this.data.selected, { ink, center: current?.center ?? { x: 0.8, y: 0.88 } })
     this.closeInk()
+    this.releaseSignatureImages()
     this.syncSignature()
   },
 
@@ -424,6 +774,7 @@ Page<ExportData, ExportActions>({
     if (this.data.busy) return
     this.signatureDrag = undefined
     this.signatures.delete(this.data.selected)
+    this.releaseSignatureImages()
     this.syncSignature()
   },
 
@@ -457,7 +808,7 @@ Page<ExportData, ExportActions>({
     const center = { x: drag.center.x + (point.x - drag.start.x) / sheet.width, y: drag.center.y + (point.y - drag.start.y) / sheet.height }
     const rect = signatureRectangle({ ...signature, center }, sheet.width, sheet.height)
     this.signatures.set(this.data.selected, {
-      ink: signature.ink,
+      ...signature,
       center: { x: (rect.left + rect.width / 2) / sheet.width, y: (rect.top + rect.height / 2) / sheet.height },
     })
     this.setData({ signatureStyle: `left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px` })
@@ -468,18 +819,18 @@ Page<ExportData, ExportActions>({
   },
 
   async savePdf() {
-    const session = this.session
+    const session = this.documentSession()
     const existing = this.existingPdf
     if ((!existing && !session?.pages.length) || this.data.busy || this.data.inkOpen || this.signatureDrag) return
-    const selected = this.data.selected
-    const selectedOnly = this.data.scope === 'current'
-    const pages = session ? (selectedOnly ? [session.pages[selected]] : session.pages) : []
     const options = exportQualities[this.data.quality]
     const dirPath = `${wx.env.USER_DATA_PATH}/scan-exports/${Date.now()}-${this.saveSequence++}`
     const filePath = `${dirPath}/${filename(this.data.filename)}.pdf`
     try {
+      const { scope, pageCount, selected, rangeStart, rangeEnd } = this.data
+      const range = exportPageRange(scope, pageCount, selected, rangeStart, rangeEnd)
+      const pages = session?.pages.slice(range.start, range.end) ?? []
       this.setData({ busy: '正在生成 PDF' })
-      const bytes = existing ? await signExistingPdf(existing.bytes, this.signatures) : await createScanPdf(pages.length, async (index) => {
+      const bytes = existing ? await signExistingPdf(existing.bytes, this.signatures, range) : await createScanPdf(pages.length, async (index) => {
         if (this.closed) throw new Error('本次导出已结束。')
         const page = pages[index]
         this.setData({ busy: `正在生成 PDF · ${index + 1} / ${pages.length}` })
@@ -490,19 +841,15 @@ Page<ExportData, ExportActions>({
         } finally {
           cleanImage(result.imagePath)
         }
-      }, (index) => this.signatures.get(selectedOnly ? selected : index))
+      }, (index) => this.signatures.get(range.start + index))
       if (this.closed) return
-      await new Promise<void>((resolve, reject) => {
-        wx.getFileSystemManager().mkdir({ dirPath, recursive: true, success: () => resolve(), fail: reject })
-      })
+      await makeDirectory(dirPath)
       await writeScanPdf(filePath, bytes)
       if (this.closed) {
         cleanPdf(filePath)
         return
       }
-      await new Promise<void>((resolve, reject) => {
-        wx.openDocument({ filePath, fileType: 'pdf', showMenu: true, success: () => resolve(), fail: reject })
-      })
+      await openPdf(filePath)
       if (this.closed) cleanPdf(filePath)
       else {
         if (this.lastPdf) cleanPdf(this.lastPdf)
