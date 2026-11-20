@@ -12,6 +12,9 @@ from scanner.jobs import OPERATIONS, RESTORATION_OPERATIONS
 from scanner.ocr import (
     OCR_MEMORY_LIMIT, OCR_UNAVAILABLE_EXIT, InvalidOcrImage, OcrUnavailable, recognize_document,
 )
+from scanner.pdf_preview import (
+    PDF_PREVIEW_OPERATION, InvalidPreviewPdf, PdfPageOutOfRange, PdfPreviewUnavailable, render_pdf_page,
+)
 from scanner.smart import (
     SMART_OPERATIONS, InvalidSmartImage, ProviderConfig, SmartError, process_smart_document,
 )
@@ -70,7 +73,23 @@ def main() -> int:
     parser.add_argument("output", type=Path)
     parser.add_argument("pixel_limit", type=int)
     parser.add_argument("--byte-limit", type=int, default=8 * 1024 * 1024)
+    parser.add_argument("--page-number", type=int)
     args = parser.parse_args()
+
+    if args.operation == PDF_PREVIEW_OPERATION:
+        if args.page_number is None:
+            return 11
+        lower_resource_limit(resource.RLIMIT_AS, 768 * 1024 * 1024)
+        lower_resource_limit(resource.RLIMIT_FSIZE, args.byte_limit)
+        try:
+            render_pdf_page(args.source, args.output, args.page_number, args.byte_limit)
+        except PdfPreviewUnavailable:
+            return 9
+        except InvalidPreviewPdf:
+            return 10
+        except PdfPageOutOfRange:
+            return 11
+        return 0
 
     if args.operation == "ocr":
         lower_resource_limit(resource.RLIMIT_AS, OCR_MEMORY_LIMIT)

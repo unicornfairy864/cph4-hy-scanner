@@ -400,12 +400,12 @@ Page<EditorData, EditorActions>({
     if (!session || !this.data.ready || !cloudEnabled || this.data.busy || this.confirming || this.closed) return
     this.confirming = true
     const ai = kind === 'ai'
-    const title = ai ? '用 DeepSeek 提示区域' : kind === 'local' ? '让 VPS 提示区域' : '生成擦除预览'
+    const title = ai ? '用 DeepSeek 提示区域' : kind === 'local' ? '云端提示区域' : '生成擦除预览'
     const content = ai
-      ? '当前处理页将上传至本项目的 VPS，再交给已配置的 DeepSeek 视觉服务，只请求可疑笔迹位置。'
+      ? '仅将当前处理页上传到云端，再交给已配置的 DeepSeek 视觉服务查找可疑笔迹位置。'
       : kind === 'local'
-        ? '仅把当前处理页上传至本项目的 VPS，在服务器上查找可疑笔迹。每个区域仍需核对。'
-        : '仅把当前处理页和已确认的区域、笔刷标记上传至本项目的 VPS，以生成可核对的擦除预览。'
+        ? '仅将当前处理页上传到云端，查找可疑笔迹。请逐个核对提示区域。'
+        : '仅将当前处理页和已确认的标记上传到云端，生成擦除预览。'
     wx.showModal({
       title, content, confirmText: ai ? '同意上传' : '上传处理',
       success: ({ confirm }) => { if (confirm && !this.closed && this.session === session && !this.data.busy) void this.run(kind, session) },

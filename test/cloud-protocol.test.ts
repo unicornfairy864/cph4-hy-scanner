@@ -24,7 +24,7 @@ interface DownloadOptions {
   success(result: { statusCode: number; tempFilePath: string }): void;
 }
 
-test('OCR, exam ink and image enhancement share the authorized queue and cleanup', async (t) => {
+test('OCR, exam ink, PDF previews and image enhancement share the authorized queue and cleanup', async (t) => {
   const runtime = globalThis as typeof globalThis & { SCANNER_API_BASE_URL?: string };
   const previousUrl = runtime.SCANNER_API_BASE_URL;
   const previousWx = Object.getOwnPropertyDescriptor(globalThis, 'wx');
@@ -98,7 +98,8 @@ test('OCR, exam ink and image enhancement share the authorized queue and cleanup
       assert.equal(options.header.Authorization, 'Bearer mock-session');
       downloads.push(new URL(options.url).pathname);
       onResult();
-      options.success({ statusCode: 200, tempFilePath: 'mock-result.jpg' });
+      const tempFilePath = uploads[uploads.length - 1]?.formData.operation === 'pdf_page_preview' ? 'mock-preview.png' : 'mock-result.jpg';
+      options.success({ statusCode: 200, tempFilePath });
     },
     getFileSystemManager: () => ({
       unlink: ({ filePath }: { filePath: string }) => removed.push(filePath),
@@ -107,7 +108,8 @@ test('OCR, exam ink and image enhancement share the authorized queue and cleanup
   Object.defineProperty(globalThis, 'wx', { configurable: true, writable: true, value: fakeWx });
 
   try {
-    const { cloudEnabled, runCloudOcr, runCloudEnhancement, runExamInkCandidates, runExamInkApply } = await import('../miniprogram/services/cloud');
+    const { cloudEnabled, runCloudOcr, runCloudEnhancement, runCloudPdfPreview, runExamInkCandidates, runExamInkApply } =
+      await import('../miniprogram/services/cloud');
     assert.equal(cloudEnabled, true);
 
     await t.test('cancelling during login prevents submission', async () => {
@@ -185,6 +187,48 @@ test('OCR, exam ink and image enhancement share the authorized queue and cleanup
       assert.deepEqual(requests, [`DELETE ${jobPath}`]);
     });
 
+    await t.test('uploads the original PDF with a one-based page and downloads its PNG preview', async () => {
+      resetTrace();
+      const filePath = 'mock-original.pdf';
+      const payload = await runCloudPdfPreview({ filePath, pageNumber: 2 });
+      assert.deepEqual(payload, { imagePath: 'mock-preview.png' });
+      assert.equal(uploads[0].filePath, filePath);
+      const { operation, pageNumber, clientRequestId } = uploads[0].formData;
+      assert.equal(operation, 'pdf_page_preview');
+      assert.equal(pageNumber, '2');
+      assert.ok(clientRequestId);
+      assert.deepEqual(downloads, [jobPath + '/result']);
+      assert.deepEqual(requests, [`DELETE ${jobPath}`]);
+      assert.deepEqual(removed, []);
+    });
+
+    await t.test('rejects invalid PDF page numbers and clears stale preview downloads', async () => {
+      resetTrace();
+      const filePath = 'mock-original.pdf';
+      for (const pageNumber of [0, 1.5, 51]) {
+        await assert.rejects(runCloudPdfPreview({ filePath, pageNumber }), /第 1 至 50 页/);
+      }
+      assert.deepEqual(uploads, []);
+
+      let cancelled = false;
+      onResult = () => { cancelled = true; };
+      await assert.rejects(runCloudPdfPreview({ filePath, pageNumber: 1, isCancelled: () => cancelled }), /已取消/);
+      assert.deepEqual(removed, ['mock-preview.png']);
+      assert.deepEqual(requests, [`DELETE ${jobPath}`]);
+    });
+
+    await t.test('shows distinct PDF preview availability and page-range failures', async () => {
+      resetTrace();
+      const options = { filePath: 'mock-original.pdf', pageNumber: 1 };
+      uploadFailure = { statusCode: 503, data: JSON.stringify({ detail: { code: 'pdf_preview_unavailable' } }) };
+      await assert.rejects(runCloudPdfPreview(options), /仍可生成签名文件/);
+      uploadFailure = undefined;
+      uploadStatus = 'failed';
+      errorCode = 'pdf_page_out_of_range';
+      await assert.rejects(runCloudPdfPreview(options), /超出云端 PDF 预览范围/);
+      assert.deepEqual(requests, [`DELETE ${jobPath}`]);
+    });
+
     await t.test('reads ordinary and AI exam candidates as normalized JSON without uploading a plan', async () => {
       resetTrace();
       const expected: ExamInkCandidatesResult = {
@@ -215,12 +259,12 @@ test('OCR, exam ink and image enhancement share the authorized queue and cleanup
     await t.test('gives a manual or ordinary detection fallback if AI is unavailable', async () => {
       resetTrace();
       uploadFailure = { statusCode: 503, data: JSON.stringify({ detail: { code: 'exam_ink_ai_unavailable' } }) };
-      await assert.rejects(runExamInkCandidates({ imagePath: 'mock-exam.jpg', ai: true }), /尚未配置 AI.+普通候选检测.+手动画笔/);
+      await assert.rejects(runExamInkCandidates({ imagePath: 'mock-exam.jpg', ai: true }), /DeepSeek.+尚未配置.+云端提示.+手动画笔/);
       assert.deepEqual(requests, []);
       uploadFailure = undefined;
       uploadStatus = 'failed';
       errorCode = 'exam_ink_provider_error';
-      await assert.rejects(runExamInkCandidates({ imagePath: 'mock-exam.jpg', ai: true }), /未返回可用候选.+普通候选检测/);
+      await assert.rejects(runExamInkCandidates({ imagePath: 'mock-exam.jpg', ai: true }), /DeepSeek.+未返回结果.+云端提示.+手动画笔/);
       assert.deepEqual(requests, [`DELETE ${jobPath}`]);
     });
 

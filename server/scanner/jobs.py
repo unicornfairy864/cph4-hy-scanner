@@ -14,16 +14,18 @@ from uuid import uuid4
 
 from scanner.exam_ink_ai import ERASE_AI_ENVIRONMENT
 from scanner.exam_ink_protocol import APPLY_OPERATION, CANDIDATE_OPERATIONS
+from scanner.pdf_preview import PDF_PREVIEW_OPERATION
 from scanner.smart import AI_ENVIRONMENT, SMART_OPERATIONS
 
 
 Operation = Literal[
     "dewarp", "deshadow", "ocr", "receipt", "identity", "exam", "clarify", "exam_restore",
-    "exam_ink_candidates", "exam_ink_ai_candidates", "exam_ink_apply",
+    "exam_ink_candidates", "exam_ink_ai_candidates", "exam_ink_apply", "pdf_page_preview",
 ]
 RESTORATION_OPERATIONS = ("clarify", "exam_restore")
 JSON_OPERATIONS = ("ocr", *SMART_OPERATIONS, *CANDIDATE_OPERATIONS)
-OPERATIONS = ("dewarp", "deshadow", *JSON_OPERATIONS, *RESTORATION_OPERATIONS, APPLY_OPERATION)
+OPERATIONS = ("dewarp", "deshadow", *JSON_OPERATIONS, *RESTORATION_OPERATIONS,
+              APPLY_OPERATION, PDF_PREVIEW_OPERATION)
 Status = Literal["queued", "running", "succeeded", "failed"]
 LOGGER = logging.getLogger(__name__)
 
@@ -35,6 +37,9 @@ ERRORS = {
     "smart_provider_error": "The document provider did not return a usable result.",
     "exam_ink_ai_unavailable": "AI ink detection is not configured.",
     "exam_ink_provider_error": "The AI ink provider did not return usable candidate regions.",
+    "pdf_preview_unavailable": "Install Poppler utilities to preview PDF pages.",
+    "invalid_pdf": "This PDF is invalid, protected, exceeds the page limit, or could not be rendered.",
+    "pdf_page_out_of_range": "This page number is not available in the PDF.",
     "processing_error": "Enhancement could not be completed.",
     "processing_timeout": "Enhancement timed out.",
     "queue_timeout": "The queued task expired before processing.",
@@ -58,13 +63,14 @@ class Job:
     operation: Operation
     directory: Path
     expires_at: float
+    page_number: int | None = None
     status: Status = "queued"
     error: str | None = None
     cancelled: bool = False
 
     @property
     def source(self) -> Path:
-        return self.directory / "source.jpg"
+        return self.directory / ("source.pdf" if self.operation == PDF_PREVIEW_OPERATION else "source.jpg")
 
     @property
     def plan(self) -> Path:
@@ -72,6 +78,8 @@ class Job:
 
     @property
     def output(self) -> Path:
+        if self.operation == PDF_PREVIEW_OPERATION:
+            return self.directory / "result.png"
         return self.directory / ("result.json" if self.operation in JSON_OPERATIONS else "result.jpg")
 
     def as_dict(self) -> dict:
@@ -140,6 +148,7 @@ class JobService:
     def submit(
         self, owner: str, request_id: str, digest: str, operation: Operation, contents: bytes,
         plan: bytes | None = None,
+        page_number: int | None = None,
     ) -> Job:
         self._expire_jobs()
         request_key = (owner, request_id)
@@ -159,7 +168,7 @@ class JobService:
 
         job_id = uuid4().hex
         job = Job(job_id, owner, request_id, digest, operation, self.storage / job_id,
-                  monotonic() + 120)
+                  monotonic() + 120, page_number=page_number)
         job.directory.mkdir(mode=0o700)
         try:
             job.source.write_bytes(contents)
@@ -261,10 +270,14 @@ class JobService:
             environment.update({key: os.environ[key] for key in ERASE_AI_ENVIRONMENT if key in os.environ})
         environment.update(OPENBLAS_NUM_THREADS="1", OMP_NUM_THREADS="1", MKL_NUM_THREADS="1",
                            PYTHONDONTWRITEBYTECODE="1")
-        self.process = await asyncio.create_subprocess_exec(
+        command = [
             sys.executable, "-m", "scanner.worker", job.operation, str(job.source),
             str(job.output), str(self.max_pixels), "--byte-limit", str(self.max_bytes),
-            stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL,
+        ]
+        if job.page_number is not None:
+            command.extend(("--page-number", str(job.page_number)))
+        self.process = await asyncio.create_subprocess_exec(
+            *command, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL, env=environment, start_new_session=True,
         )
         if job.cancelled:
@@ -288,5 +301,6 @@ class JobService:
                 2: "unsupported_page", 3: "invalid_image", 4: "ocr_unavailable",
                 5: "smart_unavailable", 6: "smart_provider_error",
                 7: "exam_ink_ai_unavailable", 8: "exam_ink_provider_error",
+                9: "pdf_preview_unavailable", 10: "invalid_pdf", 11: "pdf_page_out_of_range",
             }
             self._finish(job, errors.get(code, "processing_error"))

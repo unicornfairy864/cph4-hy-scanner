@@ -18,6 +18,8 @@ from scanner.app import Settings, WeChatExchange, create_app
 from scanner.imaging import flatten_page, remove_shadow
 from scanner.jobs import JobService, QueueFull
 from scanner.ocr import TSV_HEADER
+from scanner.pdf_preview import pdf_preview_available
+from test_pdf_preview import sample_pdf
 
 
 def sample_page() -> Image.Image:
@@ -99,14 +101,17 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         return {"Authorization": "Bearer " + response.json()["accessToken"]}
 
-    async def submit(self, headers, request_id="example", operation="deshadow", source=None, plan=None):
+    async def submit(self, headers, request_id="example", operation="deshadow", source=None, plan=None,
+                     page_number=None):
         data = {"operation": operation, "clientRequestId": request_id}
         if plan is not None:
             data["plan"] = plan
+        if page_number is not None:
+            data["pageNumber"] = page_number
+        filename = ("page.pdf", "application/pdf") if operation == "pdf_page_preview" else ("page.jpg", "image/jpeg")
         return await self.client.post(
             "/v1/jobs", headers=headers, data=data,
-            files={"file": ("page.jpg", jpeg(shadowed_page()) if source is None else source,
-                            "image/jpeg")},
+            files={"file": (filename[0], jpeg(shadowed_page()) if source is None else source, filename[1])},
         )
 
     async def wait_for_job(self, headers, path):
@@ -359,6 +364,45 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         result = await self.client.get(path + "/result", headers=token)
         self.assertEqual(result.headers["content-type"], "application/json")
         self.assertEqual(result.json(), {"width": 660, "height": 800, "candidates": []})
+
+    @unittest.skipUnless(pdf_preview_available(), "Poppler utilities are not installed")
+    async def test_pdf_preview_is_private_verifies_page_idempotency_and_cleans_source(self):
+        alice, bob = await self.headers(), await self.headers("bob")
+        source = sample_pdf()
+        submit = await self.submit(alice, operation="pdf_page_preview", source=source, page_number="2")
+        self.assertEqual(submit.status_code, 202, submit.text)
+        job_id = submit.json()["jobId"]
+        path = f"/v1/jobs/{job_id}"
+        retry = await self.submit(alice, operation="pdf_page_preview", source=source, page_number="2")
+        self.assertEqual(retry.json()["jobId"], job_id)
+        wrong_page = await self.submit(alice, operation="pdf_page_preview", source=source, page_number="1")
+        self.assertEqual(wrong_page.status_code, 409)
+        self.assertEqual((await self.client.get(path + "/result", headers=bob)).status_code, 404)
+        self.assertEqual((await self.wait_for_job(alice, path)).json()["status"], "succeeded")
+        result = await self.client.get(path + "/result", headers=alice)
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.headers["content-type"], "image/png")
+        self.assertEqual(result.headers["cache-control"], "private, no-store")
+        with Image.open(BytesIO(result.content), formats=["PNG"]) as image:
+            self.assertEqual(image.size, (800, 1600))
+        directory = self.settings.data_dir / "jobs" / job_id
+        self.assertEqual([file.name for file in directory.iterdir()], ["result.png"])
+        self.assertEqual((await self.client.delete(path, headers=alice)).status_code, 204)
+        self.assertFalse(directory.exists())
+
+    async def test_pdf_preview_enforces_operation_and_page_limit_and_has_clear_missing_tool_error(self):
+        token = await self.headers()
+        source = sample_pdf()
+        self.assertEqual((await self.submit(token, source=source)).status_code, 422)
+        for page in (None, "-1", "0", "51", "2.0"):
+            response = await self.submit(token, operation="pdf_page_preview", source=source, page_number=page)
+            self.assertEqual(response.status_code, 422)
+            self.assertEqual(response.json()["detail"]["code"], "pdf_page_out_of_range")
+        with patch("scanner.app.pdf_preview_available", return_value=False):
+            response = await self.submit(token, operation="pdf_page_preview", source=source, page_number="1")
+            self.assertEqual(response.status_code, 503)
+            self.assertEqual(response.json()["detail"]["code"], "pdf_preview_unavailable")
+        self.assertEqual(list((self.settings.data_dir / "jobs").iterdir()), [])
 
     async def test_smart_jobs_without_configuration_do_not_create_task_files(self):
         token = await self.headers()

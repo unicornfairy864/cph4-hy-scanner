@@ -23,6 +23,10 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from scanner.exam_ink_ai import erase_ai_config
 from scanner.exam_ink_protocol import APPLY_OPERATION, MAX_PLAN_BYTES, InvalidInkPlan, parse_plan
 from scanner.jobs import JSON_OPERATIONS, OPERATIONS, Job, JobService, QueueFull, RequestConflict
+from scanner.pdf_preview import (
+    MAX_PDF_PREVIEW_BYTES, MAX_PDF_PREVIEW_PAGES, PDF_PREVIEW_OPERATION,
+    has_pdf_header, pdf_preview_available,
+)
 from scanner.smart import SMART_OPERATIONS, ProviderConfig
 
 
@@ -209,6 +213,7 @@ def create_app(
         if request.headers.get("content-type", "").partition(";")[0].strip().lower() != "multipart/form-data":
             raise HTTPException(415, "Use multipart/form-data")
         plan = None
+        page_number = None
         async with request.form(max_files=1, max_fields=3, max_part_size=MAX_PLAN_BYTES) as form:
             operation = form.get("operation")
             request_id = form.get("clientRequestId")
@@ -216,11 +221,13 @@ def create_app(
             expected_fields = {"file", "operation", "clientRequestId"}
             if "plan" in form and operation == APPLY_OPERATION:
                 expected_fields.add("plan")
+            if "pageNumber" in form and operation == PDF_PREVIEW_OPERATION:
+                expected_fields.add("pageNumber")
             if (len(form.multi_items()) != len(expected_fields) or set(form.keys()) != expected_fields
                     or operation not in OPERATIONS or not isinstance(request_id, str)
                     or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", request_id)
                     or not isinstance(file, UploadFile)):
-                raise HTTPException(422, "Provide file, operation, clientRequestId and plan only for ink apply")
+                raise HTTPException(422, "Provide the required fields for this operation")
             if operation in SMART_OPERATIONS and ProviderConfig.from_env() is None:
                 raise HTTPException(503, {"code": "smart_unavailable"})
             if operation == "exam_ink_ai_candidates" and erase_ai_config() is None:
@@ -230,12 +237,34 @@ def create_app(
                     plan = json.dumps(parse_plan(form.get("plan")), separators=(",", ":")).encode()
                 except InvalidInkPlan:
                     raise HTTPException(422, {"code": "invalid_exam_ink_plan"}) from None
-            contents = await file.read(settings.max_bytes + 1)
-        validate_image(contents, settings)
-        image_hash = hashlib.sha256(contents)
-        digest = hashlib.sha256(image_hash.digest() + plan) if plan is not None else image_hash
+            byte_limit = settings.max_bytes
+            if operation == PDF_PREVIEW_OPERATION:
+                page = form.get("pageNumber")
+                if (not isinstance(page, str) or not re.fullmatch(r"[1-9][0-9]?", page)
+                        or int(page) > MAX_PDF_PREVIEW_PAGES):
+                    raise HTTPException(422, {"code": "pdf_page_out_of_range"})
+                page_number = int(page)
+                if not pdf_preview_available():
+                    raise HTTPException(503, {"code": "pdf_preview_unavailable"})
+                byte_limit = min(settings.max_bytes, MAX_PDF_PREVIEW_BYTES)
+            contents = await file.read(byte_limit + 1)
+
+        source_hash = hashlib.sha256(contents)
+        if page_number is None:
+            validate_image(contents, settings)
+            digest = hashlib.sha256(source_hash.digest() + plan) if plan is not None else source_hash
+        else:
+            if len(contents) > byte_limit:
+                raise HTTPException(413, "PDF exceeds the byte limit")
+            if not has_pdf_header(contents):
+                raise HTTPException(422, {"code": "invalid_pdf"})
+            digest = hashlib.sha256(source_hash.digest() + page_number.to_bytes(1))
+
         try:
-            return jobs.submit(owner, request_id, digest.hexdigest(), operation, contents, plan).as_dict()
+            return jobs.submit(
+                owner, request_id, digest.hexdigest(), operation, contents,
+                plan=plan, page_number=page_number,
+            ).as_dict()
         except QueueFull:
             raise HTTPException(429, "Enhancement queue or retained task limit reached",
                                 headers={"Retry-After": "5"}) from None
@@ -256,6 +285,9 @@ def create_app(
             contents = job.output.read_bytes()
         except FileNotFoundError:
             raise HTTPException(404, "Result not found or expired") from None
+        if job.operation == PDF_PREVIEW_OPERATION:
+            return Response(content=contents, media_type="image/png",
+                            headers={"Cache-Control": "private, no-store"})
         if job.operation in JSON_OPERATIONS:
             return Response(content=contents, media_type="application/json",
                             headers={"Cache-Control": "private, no-store"})

@@ -57,7 +57,10 @@
       <view class="heading">候选区域</view>
       <view class="help">提示只标出疑似位置，需逐框核对。框中只尝试清理可区分的笔迹。与印刷字交叠时可用擦除笔细画，并用保护笔保留原字。</view>
       <view class="tools bar">
-        <button data-ai="{{false}}" bindtap="suggest" disabled="{{!enabled || !!busy}}">VPS 提示</button>
+        <button class="cloud-control" data-ai="{{false}}" bindtap="suggest" disabled="{{!enabled || !!busy}}">
+          <image class="cloud-icon" src="/assets/cloud.svg" mode="aspectFit" aria-hidden="true" />
+          <text>云端提示</text>
+        </button>
         <button data-ai="{{true}}" bindtap="suggest" disabled="{{!enabled || !!busy}}">DeepSeek 提示</button>
       </view>
       <view wx:if="{{regions.length}}" class="regions">
@@ -73,7 +76,7 @@
         </view>
       </view>
       <view class="help" wx:if="{{pending || accepted}}">已采用 {{accepted}} 个，待核对 {{pending}} 个。预览仅处理已采用的框和擦除笔标记。</view>
-      <view class="help" wx:if="{{!enabled}}">圈选和画笔可先使用。生成擦除预览需要配置 VPS。</view>
+      <view class="help" wx:if="{{!enabled}}">圈选和画笔可先使用。生成擦除预览需要云端功能。</view>
     </view>
 
     <view class="panel">

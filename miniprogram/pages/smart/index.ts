@@ -207,7 +207,7 @@ Page<SmartData, SmartActions>({
     this.confirming = true
     const preparation = usesExamColor(tool.operation) && !session.page.enhanced
       ? '按当前裁切、旋转和保护编辑生成原色图，保留红蓝批改痕迹。' : ''
-    const destination = tool.image ? '本项目的 VPS' : '本项目的 VPS，再交给已配置的多模态识别服务'
+    const destination = tool.image ? '本项目的云端服务' : '本项目的云端服务，再交给已配置的多模态识别服务'
     wx.showModal({
       title: tool.title,
       content: `${preparation}仅将第 ${session.number} 页上传至${destination}。请确认可上传该页内容。`,

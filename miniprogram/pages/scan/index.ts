@@ -24,7 +24,7 @@ const modes: Array<{ value: ImageMode; label: string }> = [
 const sharpening: Array<{ value: SharpenStrength; label: string }> = [
   { value: 'off', label: '关闭' }, { value: 'mild', label: '轻度' }, { value: 'strong', label: '强力' },
 ]
-const cloudNames = { dewarp: '服务器展平', deshadow: '深阴影处理' }
+const cloudNames = { dewarp: '云端展平', deshadow: '深阴影处理' }
 
 type ImageSource = 'camera' | 'album' | 'chat'
 type CornerScores = [number, number, number, number]
@@ -234,7 +234,7 @@ interface ScannerActions {
   openArchive(): void
   openPdfSigning(): void
   applyEnhancementToAll(): void
-  selectPreview(event: WechatMiniprogram.TouchEvent): void
+  togglePreview(): void
   removePage(event: WechatMiniprogram.TouchEvent): void
   openExport(): void
   refreshAlbumPermission(): void
@@ -858,12 +858,10 @@ Page<ScannerData, ScannerActions>({
     notify(`增强设置已应用到全部 ${this.scans.length} 页。`)
   },
 
-  selectPreview(event) {
+  togglePreview() {
     const page = this.current()
-    if (!page || this.data.busy) return
-    const showOriginal = event.currentTarget.dataset.view === 'original'
-    if (showOriginal && hasMosaic(page)) return
-    if (this.data.showOriginal === showOriginal) return
+    if (!page || this.data.busy || hasMosaic(page)) return
+    const showOriginal = !this.data.showOriginal
     this.setData({ showOriginal })
     this.paint()
     if (!showOriginal) void this.refreshPreview()
@@ -1321,10 +1319,10 @@ Page<ScannerData, ScannerActions>({
     const page = this.current()
     if (!cloudEnabled || !page || this.data.busy || this.data.cropOpen || this.pageDrag || this.buttonSwap) return
     const inputKey = ocrInputKey(page)
-    const source = page.enhanced ? '将使用已采用的服务器增强图。' : '将按当前裁切与方向准备识别图片。'
+    const source = page.enhanced ? '将使用已采用的云端增强图。' : '将按当前裁切与方向准备识别图片。'
     wx.showModal({
       title: `识别第 ${this.selectedPage + 1} 页`,
-      content: `${source}只上传这一页至你的 VPS 进行文字识别。`,
+      content: `${source}仅将当前页上传到本项目的云端服务进行文字识别。`,
       confirmText: '上传识别',
       success: ({ confirm }) => {
         if (!confirm || this.closed || this.data.busy || this.data.cropOpen || this.pageDrag || this.buttonSwap) return
@@ -1410,7 +1408,7 @@ Page<ScannerData, ScannerActions>({
     }
     wx.showModal({
       title: cloudNames[operation],
-      content: '此选项会将当前页面上传到处理服务器。处理结束后可预览并决定是否采用。',
+      content: '仅将当前页上传到本项目的云端服务。处理结束后可预览并决定是否采用。',
       confirmText: '上传处理',
       success: ({ confirm }) => {
         if (confirm && !this.closed && this.current() === page && !this.data.busy && !hasMosaic(page)) {
@@ -1441,7 +1439,7 @@ Page<ScannerData, ScannerActions>({
         onStatus: (status) => {
           if (cancelled()) return
           if (status === 'queued') this.setData({ busy: '当前页正在排队' })
-          if (status === 'running') this.setData({ busy: '服务器正在处理当前页' })
+          if (status === 'running') this.setData({ busy: '云端正在处理当前页' })
           if (status === 'succeeded') this.setData({ busy: '正在获取增强结果' })
         },
       })
