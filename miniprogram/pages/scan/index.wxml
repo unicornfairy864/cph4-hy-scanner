@@ -13,6 +13,10 @@
       <button class="primary" bindtap="takePhoto" disabled="{{!!busy}}">拍照扫描</button>
       <button class="secondary" bindtap="showImportOptions" disabled="{{!!busy}}">导入图片</button>
     </view>
+    <view class="button-row welcome-tools">
+      <button class="secondary" bindtap="openArchive" disabled="{{!!busy}}">错题归档</button>
+      <button class="secondary" bindtap="openPdfSigning" disabled="{{!!busy}}">签署已有 PDF</button>
+    </view>
   </view>
 
   <view class="workspace {{cropOpen || !pageCount ? 'workspace-hidden' : ''}}">
@@ -20,7 +24,7 @@
       <view class="preview-toolbar">
         <view class="preview-count">{{selected + 1}} / {{pageCount}}</view>
         <view class="segment" aria-label="图像预览">
-          <button class="{{showOriginal ? 'segment-active' : ''}}" data-view="original" bindtap="selectPreview" disabled="{{!!busy}}">原图</button>
+          <button class="{{showOriginal ? 'segment-active' : ''}}" data-view="original" bindtap="selectPreview" disabled="{{!!busy || hasMosaic}}">原图</button>
           <button class="{{!showOriginal ? 'segment-active' : ''}}" data-view="effect" bindtap="selectPreview" disabled="{{!!busy}}">效果</button>
         </view>
         <view class="preview-actions">
@@ -31,6 +35,7 @@
       </view>
 
       <view class="image-frame" style="height:{{previewHeight}}px">
+        <view class="preview-placeholder" wx:if="{{hasMosaic && !previewLayers.length}}">等待马赛克预览</view>
         <image wx:for="{{previewLayers}}" wx:key="path" class="page-image {{item.visible ? 'page-image-visible' : ''}}"
           src="{{item.path}}" data-path="{{item.path}}" style="{{item.style}}" mode="aspectFit" bindload="finishPreviewLoad" binderror="failPreviewLoad" />
         <button class="image-arrow image-arrow-prev" data-direction="-1" bindtap="changePage"
@@ -65,7 +70,7 @@
                   bindtouchmove="movePageDrag" bindtouchend="endPageDrag" bindtouchcancel="cancelPageDrag">
                   <view class="thumbnail-tap" aria-role="button" aria-label="第 {{index + 1}} 页">
                     <view class="thumbnail-photo" style="width:{{item.width}}px;height:{{item.height}}px">
-                      <image src="{{item.source}}" mode="scaleToFill" style="{{item.photoStyle}}" lazy-load />
+                      <image wx:if="{{item.source}}" src="{{item.source}}" mode="scaleToFill" style="{{item.photoStyle}}" lazy-load />
                       <view wx:for="{{item.lines}}" wx:for-item="line" wx:key="id" class="thumbnail-edge" style="{{line.style}}" />
                     </view>
                   </view>
@@ -97,6 +102,15 @@
         </view>
 
         <view class="panel">
+          <view class="heading">页面工具</view>
+          <view class="button-row options">
+            <button class="secondary" bindtap="openDecorations" disabled="{{!!busy || dragId >= 0 || swapFrom >= 0}}">马赛克与水印</button>
+            <button class="secondary" bindtap="openSmartTools" disabled="{{!!busy || dragId >= 0 || swapFrom >= 0}}">智能工具</button>
+          </view>
+          <button class="secondary full-width" bindtap="openArchive" disabled="{{!!busy || dragId >= 0 || swapFrom >= 0}}">错题归档</button>
+        </view>
+
+        <view class="panel">
           <view class="heading">文字识别</view>
           <view class="support ocr-description" wx:if="{{cloudEnabled}}">{{hasEnhanced ? '使用已采用的服务器增强图。' : '按当前裁切与方向准备识别图片。'}}</view>
           <view class="support ocr-description" wx:else>尚未配置 VPS 文字识别服务。</view>
@@ -117,6 +131,11 @@
           </view>
           <view class="setting"><text>均衡光照</text><switch checked="{{enhance}}" disabled="{{!!busy}}" bindchange="toggleEnhance" color="#185e53" /></view>
           <view class="setting"><text>轻度去噪</text><switch checked="{{denoise}}" disabled="{{!!busy}}" bindchange="toggleDenoise" color="#185e53" /></view>
+          <view class="setting">锐化</view>
+          <view class="button-row sharpen-options" aria-label="锐化强度">
+            <button wx:for="{{sharpening}}" wx:key="value" class="option {{sharpen === item.value ? 'option-active' : ''}}"
+              data-level="{{item.value}}" bindtap="selectSharpen" disabled="{{!!busy || dragId >= 0 || swapFrom >= 0}}">{{item.label}}</button>
+          </view>
           <view class="setting"><text>书页展平</text><switch checked="{{dewarp}}" disabled="{{!!busy}}" bindchange="toggleDewarp" color="#185e53" /></view>
           <view wx:if="{{dewarp}}" class="support">适合文字行清晰的弯曲书页。</view>
           <button wx:if="{{pageCount > 1}}" class="secondary full-width" bindtap="applyEnhancementToAll" disabled="{{!!busy}}">将增强设置应用到全部页</button>
@@ -136,7 +155,7 @@
     style="transform:translate3d({{dragGhost.left}}px,{{dragGhost.top}}px,0)" aria-hidden="true">
     <view class="thumbnail-tap">
       <view class="thumbnail-photo" style="width:{{dragGhost.width}}px;height:{{dragGhost.height}}px">
-        <image src="{{dragGhost.source}}" mode="scaleToFill" style="{{dragGhost.photoStyle}}" />
+        <image wx:if="{{dragGhost.source}}" src="{{dragGhost.source}}" mode="scaleToFill" style="{{dragGhost.photoStyle}}" />
         <view wx:for="{{dragGhost.lines}}" wx:key="id" class="thumbnail-edge" style="{{item.style}}" />
       </view>
     </view>

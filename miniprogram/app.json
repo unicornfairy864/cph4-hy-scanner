@@ -1,5 +1,5 @@
 {
-  "pages": ["pages/scan/index", "pages/export/index"],
+  "pages": ["pages/scan/index", "pages/export/index", "pages/decorate/index", "pages/smart/index"],
   "workers": "workers",
   "window": {
     "navigationBarTitleText": "文档扫描",

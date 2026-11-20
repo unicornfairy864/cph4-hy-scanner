@@ -1,0 +1,87 @@
+<view class="editor">
+  <view wx:if="{{!ready}}" class="panel">
+    <view>{{error || busy || '请从扫描页打开编辑。'}}</view>
+    <button class="secondary full" bindtap="cancel">返回</button>
+  </view>
+
+  <block wx:else>
+    <view class="panel stage-panel">
+      <view class="tabs" aria-label="编辑工具">
+        <button class="{{tool === 'mosaic' ? 'selected' : ''}}" data-tool="mosaic" bindtap="chooseTool" disabled="{{!allowMosaic}}">马赛克</button>
+        <button class="{{tool === 'watermark' ? 'selected' : ''}}" data-tool="watermark" bindtap="chooseTool">水印</button>
+      </view>
+      <view class="stage-wrap">
+        <view class="decorate-stage" style="width:{{width}}px;height:{{height}}px"
+          catchtouchstart="startGesture" catchtouchmove="moveGesture" catchtouchend="endGesture" catchtouchcancel="cancelGesture">
+          <image wx:if="{{preview}}" class="stage-image" src="{{preview}}" mode="scaleToFill" />
+          <block wx:if="{{tool === 'mosaic'}}">
+            <view wx:for="{{mosaics}}" wx:key="key" class="mask {{selectedMosaic === index ? 'mask-active' : ''}}" data-mask="{{index}}"
+              style="left:{{item.x * 100}}%;top:{{item.y * 100}}%;width:{{item.width * 100}}%;height:{{item.height * 100}}%">
+              <view wx:if="{{selectedMosaic === index}}" class="mask-resize" data-mask="{{index}}" data-resize="true" aria-label="调整区域大小" />
+            </view>
+            <view wx:if="{{draftMosaic}}" class="mask mask-draft"
+              style="left:{{draftMosaic.x * 100}}%;top:{{draftMosaic.y * 100}}%;width:{{draftMosaic.width * 100}}%;height:{{draftMosaic.height * 100}}%" />
+          </block>
+          <view wx:elif="{{kind !== 'none' && layout === 'single'}}" class="watermark-pin"
+            style="left:{{position.x * 100}}%;top:{{position.y * 100}}%" aria-hidden="true" />
+        </view>
+      </view>
+      <view class="message" wx:if="{{error}}" aria-role="status">{{error}}</view>
+      <view class="message" wx:elif="{{busy}}" aria-role="status">{{busy}}</view>
+      <view class="message" wx:elif="{{tool === 'mosaic'}}">拖出区域，或移动已有区域。选中后拖动右下角可改大小。</view>
+      <view class="message" wx:elif="{{kind !== 'none' && layout === 'single'}}">点击或拖动预览设置水印位置。</view>
+      <view class="message" wx:if="{{!allowMosaic}}">关闭本地书页展平后可添加马赛克。</view>
+    </view>
+
+    <view class="panel" wx:if="{{tool === 'mosaic'}}">
+      <view class="label">马赛克像素大小</view>
+      <slider min="1" max="8" step="1" value="{{mosaicSize}}" data-name="mosaicSize" bindchange="changeSlider" show-value block-size="18" />
+      <view class="mosaic-list" wx:if="{{mosaics.length}}">
+        <button wx:for="{{mosaics}}" wx:key="key" class="secondary {{selectedMosaic === index ? 'selected' : ''}}"
+          data-index="{{index}}" bindtap="selectMosaic">区域 {{index + 1}}</button>
+      </view>
+      <button wx:if="{{selectedMosaic >= 0}}" class="secondary full" bindtap="removeMosaic">移除此区域</button>
+    </view>
+
+    <view class="panel" wx:else>
+      <view class="tabs" aria-label="水印类型">
+        <button class="{{kind === 'none' ? 'selected' : ''}}" data-kind="none" bindtap="selectKind">无</button>
+        <button class="{{kind === 'text' ? 'selected' : ''}}" data-kind="text" bindtap="selectKind">文字</button>
+        <button class="{{kind === 'image' ? 'selected' : ''}}" data-kind="image" bindtap="selectKind">图片</button>
+      </view>
+      <block wx:if="{{kind !== 'none'}}">
+        <block wx:if="{{kind === 'text'}}">
+          <input class="watermark-input" placeholder="输入水印文字" value="{{text}}" maxlength="80"
+            bindinput="setText" bindblur="schedulePreview" />
+          <view class="swatches" aria-label="文字颜色">
+            <button class="swatch {{color === '#ffffff' ? 'swatch-selected' : ''}}" style="background:#ffffff" data-color="#ffffff" bindtap="chooseColor" aria-label="白色" />
+            <button class="swatch {{color === '#293338' ? 'swatch-selected' : ''}}" style="background:#293338" data-color="#293338" bindtap="chooseColor" aria-label="深灰" />
+            <button class="swatch {{color === '#a63238' ? 'swatch-selected' : ''}}" style="background:#a63238" data-color="#a63238" bindtap="chooseColor" aria-label="红色" />
+            <button class="swatch {{color === '#2b6759' ? 'swatch-selected' : ''}}" style="background:#2b6759" data-color="#2b6759" bindtap="chooseColor" aria-label="绿色" />
+          </view>
+        </block>
+        <button wx:else class="secondary full" bindtap="chooseLogo">{{logo ? '更换水印图片' : '从相册选择水印图片'}}</button>
+        <view class="tabs layout-tabs" aria-label="水印布局">
+          <button class="{{layout === 'single' ? 'selected' : ''}}" data-layout="single" bindtap="selectLayout">单个</button>
+          <button class="{{layout === 'tile' ? 'selected' : ''}}" data-layout="tile" bindtap="selectLayout">全页平铺</button>
+        </view>
+        <view class="label">不透明度</view>
+        <slider min="10" max="100" value="{{opacity}}" data-name="opacity" bindchange="changeSlider" show-value block-size="18" />
+        <view class="label">大小</view>
+        <slider min="3" max="45" value="{{size}}" data-name="size" bindchange="changeSlider" show-value block-size="18" />
+        <view class="label">角度</view>
+        <slider min="-180" max="180" value="{{angle}}" data-name="angle" bindchange="changeSlider" show-value block-size="18" />
+        <block wx:if="{{layout === 'tile'}}">
+          <view class="label">平铺间距</view>
+          <slider min="2" max="30" value="{{spacing}}" data-name="spacing" bindchange="changeSlider" show-value block-size="18" />
+          <view class="switch-row"><text>错行平铺</text><switch checked="{{stagger}}" bindchange="toggleStagger" color="#185e53" /></view>
+        </block>
+      </block>
+    </view>
+
+    <view class="editor-actions">
+      <button class="secondary" bindtap="cancel">取消</button>
+      <button class="primary" bindtap="apply" disabled="{{!!busy || !!error || applying}}">应用到当前页</button>
+    </view>
+  </block>
+</view>

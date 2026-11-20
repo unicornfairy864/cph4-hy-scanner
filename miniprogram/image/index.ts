@@ -1,12 +1,18 @@
 import { detectDocument } from '../workers/image/detect';
+import { finishImage } from '../workers/image/finish';
 import { renderDocument } from '../workers/image/render';
 import type {
-  Detection, Frame, ImageMode, ImageOperation, ImageQuality, Quad, RenderOptions, Rotation, WorkerReply, WorkerRequest,
+  Detection, Frame, ImageMode, ImageOperation, ImageQuality, Quad, Rotation, SharpenStrength, WorkerReply, WorkerRequest,
 } from '../workers/image/types';
+import { paintWatermarks } from './decoration';
+import type { ImageDecorations, WatermarkContext } from './decoration';
 import { orientationTransform, resetJpegOrientation } from './orientation';
 import type { Transform } from './orientation';
 
-export type { CornerConfidences, ImageMode, ImageQuality, Point, Quad, Rotation } from '../workers/image/types';
+export type {
+  CornerConfidences, ImageMode, ImageQuality, MosaicRegion, Point, Quad, Rotation, SharpenStrength,
+} from '../workers/image/types';
+export type { ImageDecorations, ImageWatermark, TextWatermark, Watermark } from './decoration';
 
 interface Source {
   imagePath: string;
@@ -17,16 +23,25 @@ interface ImageFile extends Source {
   height: number;
 }
 
-interface RenderRequest extends Source {
+interface OutputOptions {
+  quality: ImageQuality;
+  maxDimension?: number;
+  jpegQuality?: number;
+  sharpen?: SharpenStrength;
+  decorations?: ImageDecorations;
+}
+
+interface RenderRequest extends Source, OutputOptions {
   corners: Quad;
   rotation: Rotation;
   mode: ImageMode;
   denoise: boolean;
-  quality: ImageQuality;
   enhance?: boolean;
   dewarp?: boolean;
-  maxDimension?: number;
-  jpegQuality?: number;
+}
+
+interface DecorationRequest extends Source, OutputOptions {
+  rotation?: Rotation;
 }
 
 interface CanvasImage {
@@ -37,11 +52,9 @@ interface CanvasImage {
   onerror: (() => void) | null;
 }
 
-interface CanvasContext {
-  fillStyle: string;
+interface CanvasContext extends WatermarkContext<CanvasImage> {
   fillRect(x: number, y: number, width: number, height: number): void;
   setTransform(...transform: Transform): void;
-  drawImage(image: CanvasImage, x: number, y: number, width: number, height: number): void;
   getImageData(x: number, y: number, width: number, height: number): Frame;
   createImageData(width: number, height: number): Frame;
   putImageData(image: Frame, x: number, y: number): void;
@@ -269,10 +282,10 @@ export function detectQuad({ imagePath }: Source): Promise<Detection> {
   });
 }
 
-async function renderFrame(frame: Frame, options: RenderOptions): Promise<Frame> {
+async function processFrame(frame: Frame, operation: Exclude<ImageOperation, { type: 'detect' }>): Promise<Frame> {
   if (!workerDisabled) {
     try {
-      const reply = await sendToWorker(frame, { type: 'render', options });
+      const reply = await sendToWorker(frame, operation);
       if (reply.type === 'render' && reply.pixels instanceof ArrayBuffer
         && reply.pixels.byteLength === 4 * reply.width * reply.height) {
         return { width: reply.width, height: reply.height, data: new Uint8ClampedArray(reply.pixels) };
@@ -282,30 +295,79 @@ async function renderFrame(frame: Frame, options: RenderOptions): Promise<Frame>
       useLocalFallback();
     }
   }
-  return renderDocument(frame, options);
+  return operation.type === 'render' ? renderDocument(frame, operation.options) : finishImage(frame, operation.options);
+}
+
+function outputSettings({ quality, maxDimension, jpegQuality }: OutputOptions) {
+  const fallbackEdge = quality === 'preview' ? 880 : 2200;
+  const edge = Number.isFinite(maxDimension) && maxDimension !== undefined
+    ? Math.max(2, Math.min(MAX_WORKING_EDGE, Math.round(maxDimension))) : fallbackEdge;
+  const fallbackQuality = quality === 'preview' ? 0.85 : 0.92;
+  const compression = Number.isFinite(jpegQuality) && jpegQuality !== undefined
+    ? Math.max(0, Math.min(1, jpegQuality)) : fallbackQuality;
+  return { edge, compression };
+}
+
+function putFrame(drawing: CanvasContext, result: Frame): void {
+  const output = drawing.createImageData(result.width, result.height);
+  output.data.set(result.data);
+  drawing.putImageData(output, 0, 0);
+}
+
+async function savePage(canvas: Canvas, drawing: CanvasContext, compression: number,
+  decorations?: ImageDecorations): Promise<ImageFile> {
+  await paintWatermarks(drawing, canvas, decorations?.watermarks, (path) => loadImage(canvas, path));
+  const imagePath = await exportJpeg(canvas, compression);
+  return { imagePath, width: canvas.width, height: canvas.height };
 }
 
 export function renderPage({
-  imagePath, corners, rotation, mode, denoise, enhance, dewarp, quality, maxDimension, jpegQuality,
+  imagePath, corners, rotation, mode, denoise, enhance, dewarp, sharpen, decorations, ...output
 }: RenderRequest): Promise<ImageFile> {
   return serialize(async () => {
-    const fallbackEdge = quality === 'preview' ? 880 : 2200;
-    const outputEdge = Number.isFinite(maxDimension) && maxDimension !== undefined
-      ? Math.max(2, Math.min(MAX_WORKING_EDGE, Math.round(maxDimension))) : fallbackEdge;
-    const fallbackQuality = quality === 'preview' ? 0.85 : 0.92;
-    const outputQuality = Number.isFinite(jpegQuality) && jpegQuality !== undefined
-      ? Math.max(0, Math.min(1, jpegQuality)) : fallbackQuality;
-    const frame = await readFrame(imagePath, quality === 'preview' ? Math.max(1024, outputEdge) : MAX_WORKING_EDGE);
-    const result = await renderFrame(frame, { corners, rotation, mode, denoise, enhance, dewarp, maxDimension: outputEdge });
+    const { edge, compression } = outputSettings(output);
+    const frame = await readFrame(imagePath, output.quality === 'preview' ? Math.max(1024, edge) : MAX_WORKING_EDGE);
+    const result = await processFrame(frame, { type: 'render', options: {
+      corners, rotation, mode, denoise, enhance, dewarp, sharpen, mosaics: decorations?.mosaics, maxDimension: edge,
+    } });
 
     const { canvas, context } = canvas2d();
     canvas.width = result.width;
     canvas.height = result.height;
     const drawing = context();
-    const output = drawing.createImageData(result.width, result.height);
-    output.data.set(result.data);
-    drawing.putImageData(output, 0, 0);
-    const resultPath = await exportJpeg(canvas, outputQuality);
-    return { imagePath: resultPath, width: result.width, height: result.height };
+    putFrame(drawing, result);
+    return savePage(canvas, drawing, compression, decorations);
+  });
+}
+
+/** Apply finishing edits to a page which has already been cropped or enhanced. */
+export function decorateImage({
+  imagePath, decorations, sharpen, rotation = 0, ...output
+}: DecorationRequest): Promise<ImageFile> {
+  return serialize(async () => {
+    const { edge, compression } = outputSettings(output);
+    const { canvas, context } = canvas2d();
+    const image = await loadImage(canvas, imagePath);
+    const size = sizeAtMost(image.width, image.height, edge);
+    const quarterTurn = rotation === 90 || rotation === 270;
+    canvas.width = quarterTurn ? size.height : size.width;
+    canvas.height = quarterTurn ? size.width : size.height;
+    const drawing = context();
+    drawing.fillStyle = '#fff';
+    drawing.fillRect(0, 0, canvas.width, canvas.height);
+    if (rotation !== 0) {
+      drawing.save();
+      const orientation = rotation === 90 ? 6 : rotation === 180 ? 3 : 8;
+      drawing.setTransform(...orientationTransform(orientation, size.width, size.height));
+    }
+    drawing.drawImage(image, 0, 0, size.width, size.height);
+    if (rotation !== 0) drawing.restore();
+
+    const mosaics = decorations?.mosaics;
+    if (mosaics?.length || (sharpen && sharpen !== 'off')) {
+      const frame = drawing.getImageData(0, 0, canvas.width, canvas.height);
+      putFrame(drawing, await processFrame(frame, { type: 'finish', options: { mosaics, sharpen } }));
+    }
+    return savePage(canvas, drawing, compression, decorations);
   });
 }

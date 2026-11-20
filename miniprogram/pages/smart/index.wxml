@@ -1,0 +1,102 @@
+<view class="smart-page">
+  <view class="tab-row" wx:if="{{pageNumber}}">
+    <button class="tab {{tab === 'tools' ? 'active' : ''}}" data-tab="tools" bindtap="selectTab" disabled="{{!!busy}}">当前页工具</button>
+    <button class="tab {{tab === 'archive' ? 'active' : ''}}" data-tab="archive" bindtap="selectTab" disabled="{{!!busy}}">错题归档</button>
+  </view>
+
+  <block wx:if="{{tab === 'tools' && pageNumber}}">
+    <view class="panel">
+      <view class="preview-bar">
+        <view class="heading">第 {{pageNumber}} 页</view>
+        <view class="compare-row" wx:if="{{image}}">
+          <button class="compare {{compare === 'source' ? 'active' : ''}}" data-compare="source" bindtap="selectCompare">处理前</button>
+          <button class="compare {{compare === 'result' ? 'active' : ''}}" data-compare="result" bindtap="selectCompare">处理后</button>
+        </view>
+      </view>
+      <view class="preview">
+        <image wx:if="{{image || source}}" src="{{image ? (compare === 'result' ? image : comparisonSource) : source}}" mode="aspectFit" />
+        <text wx:else>{{sourcePending ? '正在准备预览' : (sourceError || '当前页预览不可用')}}</text>
+      </view>
+      <view wx:if="{{image}}" class="button-row">
+        <button class="secondary" bindtap="saveResult" disabled="{{!!busy}}">保存图片</button>
+        <button wx:if="{{!protectedPage}}" class="primary" bindtap="adoptResult" disabled="{{!!busy}}">应用到扫描页</button>
+      </view>
+    </view>
+
+    <view class="panel">
+      <view class="heading">处理工具</view>
+      <view class="tool-grid">
+        <button wx:for="{{tools}}" wx:key="operation" class="tool {{selectedTool === index ? 'active' : ''}}"
+          data-index="{{index}}" bindtap="selectTool" disabled="{{!!busy}}">{{item.title}}</button>
+      </view>
+      <view class="note">{{tools[selectedTool].detail}}</view>
+      <view wx:if="{{!enabled}}" class="notice">尚未配置处理 VPS，仍可使用本机错题归档。</view>
+      <button wx:if="{{!running}}" class="primary process-button" bindtap="requestProcessing" disabled="{{!enabled || !!busy}}">
+        {{image || document ? '重新处理当前页' : '处理当前页'}}
+      </button>
+      <view wx:if="{{running}}" class="progress" aria-role="status">
+        <text>{{busy}}</text>
+        <button class="secondary compact" bindtap="cancelProcessing">取消</button>
+      </view>
+      <view wx:if="{{message}}" class="notice" aria-role="status">{{message}}</view>
+    </view>
+
+    <view class="panel" wx:if="{{document}}">
+      <view class="heading">{{document.title || tools[selectedTool].title}}</view>
+      <view class="notice" wx:if="{{document.warnings.length}}">
+        <view wx:for="{{document.warnings}}" wx:key="*this">{{item}}</view>
+      </view>
+      <view class="fields" wx:if="{{document.fields.length}}">
+        <view class="field" wx:for="{{document.fields}}" wx:key="position">
+          <text class="field-label">{{item.label}}</text>
+          <text class="field-value" user-select="{{true}}">{{item.value || '未识别'}}</text>
+          <text class="warning" wx:if="{{item.uncertain}}">存疑</text>
+        </view>
+        <button class="secondary process-button" bindtap="copyFields">复制字段</button>
+      </view>
+      <block wx:if="{{items.length}}">
+        <view class="note">请查看原页核对题目和批改，再选择要收录的错题。</view>
+        <view class="question" wx:for="{{items}}" wx:key="position">
+          <view class="question-bar">
+            <text class="question-title">{{item.number ? '题号 ' + item.number : '题目 ' + (index + 1)}}</text>
+            <text class="grade {{item.status}}">{{item.status === 'incorrect' ? '疑似错题' : (item.status === 'correct' ? '未见错误' : '存疑')}}</text>
+          </view>
+          <text class="question-text" user-select="{{true}}">{{item.question || '题干未识别'}}</text>
+          <view class="question-detail" wx:if="{{item.studentAnswer}}">作答　{{item.studentAnswer}}</view>
+          <view class="question-detail" wx:if="{{item.referenceAnswer}}">参考答案　{{item.referenceAnswer}}</view>
+          <view class="question-detail" wx:if="{{item.correction}}">批改　{{item.correction}}</view>
+          <view class="question-detail" wx:if="{{item.evidence}}">依据　{{item.evidence}}</view>
+          <button wx:if="{{item.status !== 'correct' && item.question}}" class="secondary select-question {{item.selected ? 'active' : ''}}"
+            data-index="{{index}}" bindtap="selectReviewItem" disabled="{{!!busy}}">
+            {{item.selected ? '已选 · 取消' : (item.status === 'uncertain' ? '人工确认错题' : '选择此题')}}
+          </button>
+        </view>
+        <button class="primary process-button" bindtap="archiveSelected" disabled="{{!selectedCount || !!busy}}">收录已选错题{{selectedCount ? '（' + selectedCount + '）' : ''}}</button>
+      </block>
+    </view>
+  </block>
+
+  <view class="panel" wx:elif="{{tab === 'archive'}}">
+    <view class="question-bar">
+      <view class="heading">错题归档</view>
+      <text class="note">{{archived.length}} 题</text>
+    </view>
+    <view class="note">归档保存在此设备。导出 PDF 后可保存或转发，用于打印。</view>
+    <button wx:if="{{archived.length}}" class="primary process-button" bindtap="printArchive" disabled="{{!!busy}}">{{busy || '导出全部错题 PDF'}}</button>
+    <view class="empty" wx:else>暂无归档。识别试卷后可选择错题收录。</view>
+    <view class="question" wx:for="{{archived}}" wx:key="id">
+      <view class="question-bar">
+        <text class="question-title">{{item.number ? '题号 ' + item.number : '错题 ' + (index + 1)}}</text>
+        <button class="secondary compact remove" data-id="{{item.id}}" bindtap="removeArchived" disabled="{{!!busy}}" aria-label="移除这道错题">移除</button>
+      </view>
+      <view class="question-detail" wx:if="{{item.source}}">{{item.source}}</view>
+      <text class="question-text" user-select="{{true}}">{{item.question}}</text>
+      <view class="question-detail" wx:if="{{item.studentAnswer}}">作答　{{item.studentAnswer}}</view>
+      <view class="question-detail" wx:if="{{item.referenceAnswer}}">参考答案　{{item.referenceAnswer}}</view>
+      <view class="question-detail" wx:if="{{item.correction}}">批改　{{item.correction}}</view>
+      <view class="question-detail" wx:if="{{item.evidence}}">依据　{{item.evidence}}</view>
+    </view>
+  </view>
+
+  <view class="panel empty" wx:else>请返回扫描页选择要处理的文档。</view>
+</view>

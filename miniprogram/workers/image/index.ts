@@ -1,4 +1,5 @@
 import { detectDocument } from './detect';
+import { finishImage } from './finish';
 import { renderDocument } from './render';
 import type { Frame, WorkerReply, WorkerRequest } from './types';
 
@@ -15,7 +16,9 @@ worker.onMessage(({ id, operation, width, height, pixels }) => {
       worker.postMessage({ id, type: 'detect', result: detectDocument(frame) });
       return;
     }
-    const result = renderDocument(frame, operation.options);
+    const result = operation.type === 'render'
+      ? renderDocument(frame, operation.options)
+      : finishImage(frame, operation.options);
     worker.postMessage({
       id,
       type: 'render',

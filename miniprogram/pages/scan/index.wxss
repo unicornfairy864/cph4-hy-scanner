@@ -56,6 +56,7 @@ button[disabled] { opacity: 0.5; }
 .welcome-title { font-size: 54rpx; font-weight: 720; letter-spacing: 2rpx; margin: 32rpx 0 8rpx; }
 .welcome-actions { margin-top: 44rpx; width: 100%; }
 .welcome-actions > button { min-height: 88rpx; }
+.welcome-tools { margin-top: 14rpx; width: 100%; }
 
 .paper-mark {
   align-items: center;
@@ -130,6 +131,7 @@ button.save-button {
 
 .page-image { display: block; height: 100%; left: 50%; opacity: 0; pointer-events: none; position: absolute; top: 50%; transform: translate(-50%,-50%); width: 100%; }
 .page-image-visible { opacity: 1; }
+.preview-placeholder { color: #e0ebe3; font-size: 27rpx; left: 50%; position: absolute; top: 50%; transform: translate(-50%,-50%); white-space: nowrap; }
 
 button.image-arrow {
   align-items: center;
@@ -222,6 +224,7 @@ button.organizer-button { align-items: center; display: flex; gap: 6rpx; justify
 button.organizer-button.secondary { background: #e2ebe3; }
 .organizer-symbol { font-size: 30rpx; line-height: 1; }
 .options { margin: 16rpx 0; }
+.sharpen-options { margin: 0 0 12rpx; }
 .active-cloud { margin-top: 8rpx; }
 .ocr-description { margin-top: 10rpx; }
 .ocr-result { margin-top: 18rpx; }

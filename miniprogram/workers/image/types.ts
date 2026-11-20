@@ -8,6 +8,13 @@ export type CornerConfidences = [number, number, number, number];
 export type Rotation = 0 | 90 | 180 | 270;
 export type ImageMode = 'color' | 'grayscale' | 'bw';
 export type ImageQuality = 'preview' | 'export';
+export type SharpenStrength = 'off' | 'mild' | 'strong';
+
+export interface MosaicRegion extends Point {
+  width: number;
+  height: number;
+  blockSize?: number;
+}
 
 export interface Frame {
   width: number;
@@ -15,7 +22,12 @@ export interface Frame {
   data: Uint8ClampedArray;
 }
 
-export interface RenderOptions {
+export interface FinishOptions {
+  sharpen?: SharpenStrength;
+  mosaics?: MosaicRegion[];
+}
+
+export interface RenderOptions extends FinishOptions {
   corners: Quad;
   rotation: Rotation;
   mode: ImageMode;
@@ -31,7 +43,10 @@ export interface Detection {
   cornerConfidences: CornerConfidences;
 }
 
-export type ImageOperation = { type: 'detect' } | { type: 'render'; options: RenderOptions };
+export type ImageOperation =
+  | { type: 'detect' }
+  | { type: 'render'; options: RenderOptions }
+  | { type: 'finish'; options: FinishOptions };
 
 export interface WorkerRequest {
   id: number;

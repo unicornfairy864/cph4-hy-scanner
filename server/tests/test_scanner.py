@@ -276,6 +276,59 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(escaped.exists())
             self.assertFalse((self.settings.data_dir / "jobs" / job_id).exists())
 
+    async def test_smart_jobs_without_configuration_do_not_create_task_files(self):
+        token = await self.headers()
+        with patch.dict(os.environ, {"SCANNER_AI_MODEL": ""}):
+            for operation in ("receipt", "identity", "exam"):
+                response = await self.submit(token, operation=operation)
+                self.assertEqual(response.status_code, 503)
+                self.assertEqual(response.json(), {"detail": {"code": "smart_unavailable"}})
+        self.assertEqual(list((self.settings.data_dir / "jobs").iterdir()), [])
+
+    async def test_configured_smart_job_returns_private_json_using_worker_environment(self):
+        token = await self.headers()
+        bob = await self.headers("bob")
+        document = '{"operation":"exam","title":"试卷识别","fields":[],"items":[],"warnings":[]}'
+        ai = {"SCANNER_AI_BASE_URL": "https://example.test/v1",
+              "SCANNER_AI_API_KEY": "test-only", "SCANNER_AI_MODEL": "test-vision"}
+
+        class CompletedWorker:
+            async def wait(self):
+                return 0
+
+        async def worker(*args, env, **kwargs):
+            self.assertEqual(args[3], "exam")
+            for key, value in ai.items():
+                self.assertEqual(env[key], value)
+            self.assertNotIn("WECHAT_APP_SECRET", env)
+            self.assertNotIn("SCANNER_TOKEN_SECRET", env)
+            Path(args[5]).write_text(document, encoding="utf-8")
+            return CompletedWorker()
+
+        with patch.dict(os.environ, ai), patch("scanner.jobs.asyncio.create_subprocess_exec", worker):
+            response = await self.submit(token, operation="exam")
+            self.assertEqual(response.status_code, 202)
+            path = "/v1/jobs/" + response.json()["jobId"]
+            self.assertEqual((await self.wait_for_job(token, path)).json()["status"], "succeeded")
+            self.assertEqual((await self.client.get(path + "/result", headers=bob)).status_code, 404)
+            result = await self.client.get(path + "/result", headers=token)
+            self.assertEqual(result.headers["content-type"], "application/json")
+            self.assertEqual(result.headers["cache-control"], "private, no-store")
+            self.assertEqual(result.text, document)
+
+    async def test_restoration_jobs_return_jpeg_without_provider_configuration(self):
+        token = await self.headers()
+        with patch.dict(os.environ, {"SCANNER_AI_MODEL": ""}):
+            for operation in ("clarify", "exam_restore"):
+                response = await self.submit(token, request_id=operation, operation=operation)
+                self.assertEqual(response.status_code, 202)
+                path = "/v1/jobs/" + response.json()["jobId"]
+                self.assertEqual((await self.wait_for_job(token, path)).json()["status"], "succeeded")
+                result = await self.client.get(path + "/result", headers=token)
+                self.assertEqual(result.headers["content-type"], "image/jpeg")
+                with Image.open(BytesIO(result.content)) as image:
+                    self.assertEqual(image.size, (660, 800))
+
     async def test_wechat_exchange_sends_expected_fields(self):
         def respond(request: httpx.Request) -> httpx.Response:
             self.assertEqual(request.url.host, "api.weixin.qq.com")

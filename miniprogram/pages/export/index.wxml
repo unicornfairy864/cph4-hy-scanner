@@ -1,12 +1,40 @@
 <view class="export-page">
   <view class="export-card" wx:if="{{pageCount}}">
+    <view class="existing-pdf" wx:if="{{existingPdfName}}">
+      <view class="field-label pdf-name">{{existingPdfName}}</view>
+      <view class="signature-hint">此处显示页面边界，供放置手写签名。</view>
+      <view class="choice-row">
+        <button class="choice" bindtap="openOriginalPdf" disabled="{{!!busy}}">查看原 PDF</button>
+        <button class="choice" bindtap="restoreScanDraft" disabled="{{!!busy}}" wx:if="{{hasScans}}">返回扫描件</button>
+        <button class="choice" bindtap="chooseExistingPdf" disabled="{{!!busy}}" wx:else>更换 PDF</button>
+      </view>
+    </view>
     <view class="preview-frame">
-      <image class="preview-image" src="{{preview}}" style="{{previewStyle}}" mode="aspectFit" />
+      <view wx:if="{{sheetStyle}}" class="preview-sheet" style="{{sheetStyle}}">
+        <image wx:if="{{preview}}" class="preview-image" src="{{preview}}" style="{{previewStyle}}" mode="aspectFit" />
+        <view wx:if="{{signatureStyle}}" class="signature-overlay" style="{{signatureStyle}}" aria-label="拖动调整签名位置"
+          catchtouchstart="startSignatureDrag" catchtouchmove="moveSignatureDrag" catchtouchend="endSignatureDrag" catchtouchcancel="endSignatureDrag">
+          <view wx:for="{{signatureSegments}}" wx:key="id" class="signature-segment" style="{{item.style}}" />
+        </view>
+      </view>
+      <view wx:else class="preview-placeholder">
+        <text>{{previewMessage}}</text>
+        <button wx:if="{{previewFailed}}" class="choice preview-retry" bindtap="showPreview">重试</button>
+      </view>
       <button class="preview-arrow preview-prev" data-direction="-1" bindtap="changePage" disabled="{{!!busy || selected === 0}}" aria-label="上一页">‹</button>
       <button class="preview-arrow preview-next" data-direction="1" bindtap="changePage" disabled="{{!!busy || selected === pageCount - 1}}" aria-label="下一页">›</button>
       <view class="preview-count">{{selected + 1}} / {{pageCount}}</view>
     </view>
-    <view class="export-field" wx:if="{{pageCount > 1}}">
+    <view class="export-field">
+      <view class="field-label">手写签名</view>
+      <view class="choice-row">
+        <button class="choice" bindtap="openInk" disabled="{{!!busy || !sheetStyle}}">{{signatureStyle ? '重签此页' : '签署此页'}}</button>
+        <button wx:if="{{signatureStyle}}" class="choice" bindtap="removeSignature" disabled="{{!!busy}}">移除此页签名</button>
+      </view>
+      <view wx:if="{{signatureStyle}}" class="signature-hint">在页面预览中拖动签名调整位置。</view>
+      <button wx:if="{{signatureStyle && pageCount > 1}}" class="choice signature-all" bindtap="reuseSignature" disabled="{{!!busy}}">应用到未签页</button>
+    </view>
+    <view class="export-field" wx:if="{{!existingPdfName && pageCount > 1}}">
       <view class="field-label">页面范围</view>
       <view class="choice-row">
         <button class="choice {{scope === 'all' ? 'choice-active' : ''}}" data-scope="all" bindtap="selectScope" disabled="{{!!busy}}">全部 {{pageCount}} 页</button>
@@ -17,15 +45,33 @@
       <label for="filename" class="field-label">文件名称</label>
       <input id="filename" type="text" value="{{filename}}" placeholder="扫描文档" maxlength="70" bindinput="setFilename" disabled="{{!!busy}}" />
     </view>
-    <view class="export-field">
+    <view class="export-field" wx:if="{{!existingPdfName}}">
       <view class="field-label">导出清晰度</view>
       <view class="choice-row">
         <button wx:for="{{qualities}}" wx:key="label" class="choice {{quality === index ? 'choice-active' : ''}}"
           data-index="{{index}}" bindtap="selectQuality" disabled="{{!!busy}}">{{item.label}}</button>
       </view>
     </view>
-    <button class="primary" bindtap="savePdf" disabled="{{!!busy}}">{{busy || '生成 PDF'}}</button>
+    <button class="primary" bindtap="savePdf" disabled="{{!!busy}}">{{busy || (existingPdfName ? '生成签名 PDF' : '生成 PDF')}}</button>
     <view class="export-note">生成后可在微信文档菜单保存或转发。</view>
+    <button wx:if="{{!existingPdfName}}" class="choice signing-switch" bindtap="chooseExistingPdf" disabled="{{!!busy}}">签署已有 PDF</button>
   </view>
-  <view class="export-card export-note" wx:else>请返回扫描页添加图片。</view>
+  <view class="export-card" wx:else>
+    <view class="field-label">签署已有 PDF</view>
+    <view class="signature-hint">选择 10 MB 以内、最多 50 页的 PDF。</view>
+    <button class="primary" bindtap="chooseExistingPdf" disabled="{{!!busy}}">{{busy || '从聊天选择 PDF'}}</button>
+  </view>
+  <view wx:if="{{inkOpen}}" class="ink-mask" catchtouchmove="moveInk">
+    <view class="ink-dialog" aria-role="dialog">
+      <view class="field-label">手写签名</view>
+      <view class="ink-surface" catchtouchstart="startInk" catchtouchmove="moveInk" catchtouchend="endInk" catchtouchcancel="endInk">
+        <canvas id="signature-pad" type="2d" class="ink-pad" />
+      </view>
+      <view class="choice-row">
+        <button class="choice" bindtap="closeInk">取消</button>
+        <button class="choice" bindtap="clearInk" disabled="{{!hasInk}}">清空</button>
+        <button class="primary" bindtap="applyInk" disabled="{{!hasInk}}">使用签名</button>
+      </view>
+    </view>
+  </view>
 </view>
