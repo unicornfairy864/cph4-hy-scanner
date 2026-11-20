@@ -41,7 +41,37 @@ export interface OcrResult {
   lines: OcrLine[];
 }
 
-type JobOperation = CloudOperation | SmartOperation | 'ocr';
+export type ExamInkBox = [number, number, number, number];
+export type ExamInkPoint = [number, number];
+
+export interface ExamInkCandidate {
+  box: ExamInkBox;
+  review: boolean;
+}
+
+export interface ExamInkCandidatesResult {
+  width: number;
+  height: number;
+  candidates: ExamInkCandidate[];
+}
+
+export interface ExamInkStroke {
+  points: ExamInkPoint[];
+  radius: number;
+}
+
+export interface ExamInkPlan {
+  regions: ExamInkBox[];
+  erase: ExamInkStroke[];
+  protect: ExamInkStroke[];
+}
+
+type JobOperation = CloudOperation | SmartOperation | 'ocr' | 'exam_ink_candidates' | 'exam_ink_ai_candidates' | 'exam_ink_apply';
+
+interface JobPayload {
+  operation: JobOperation;
+  plan?: string;
+}
 
 interface CloudJob {
   jobId: string;
@@ -61,6 +91,14 @@ interface EnhancementOptions extends CloudTaskOptions {
 
 interface SmartOptions extends CloudTaskOptions {
   operation: SmartOperation;
+}
+
+interface ExamInkCandidatesOptions extends CloudTaskOptions {
+  ai?: boolean;
+}
+
+interface ExamInkApplyOptions extends CloudTaskOptions {
+  plan: ExamInkPlan;
 }
 
 interface Session {
@@ -88,7 +126,7 @@ class NetworkError extends Error {}
 
 class HttpError extends Error {
   constructor(readonly status: number, code?: string) {
-    super(code === 'smart_unavailable' ? failureMessage(code) : ({
+    super(code === 'smart_unavailable' || code === 'exam_ink_ai_unavailable' || code === 'invalid_exam_ink_plan' ? failureMessage(code) : ({
       401: '微信登录失效，请重新尝试',
       404: '云端任务已过期，请重新提交',
       409: '云端任务状态已变化，请重新尝试',
@@ -117,7 +155,7 @@ function responseObject(raw: unknown): Record<string, unknown> {
 function requireSuccess(status: number, raw?: unknown): void {
   if (status >= 200 && status < 300) return;
   let code: string | undefined;
-  if (status === 503 && raw !== undefined) {
+  if ((status === 422 || status === 503) && raw !== undefined) {
     try {
       const detail = responseObject(responseObject(raw).detail);
       if (typeof detail.code === 'string') code = detail.code;
@@ -204,13 +242,13 @@ function jobFromResponse(raw: unknown): CloudJob {
   return { jobId, status, errorCode: typeof errorCode === 'string' ? errorCode : undefined };
 }
 
-function upload(imagePath: string, operation: JobOperation, clientRequestId: string, token: string): Promise<CloudJob> {
+function upload(imagePath: string, payload: JobPayload, clientRequestId: string, token: string): Promise<CloudJob> {
   return new Promise((resolve, reject) => {
     wx.uploadFile({
       url: apiBaseUrl + '/v1/jobs',
       filePath: imagePath,
       name: 'file',
-      formData: { operation, clientRequestId },
+      formData: { ...payload, clientRequestId },
       header: { Authorization: 'Bearer ' + token },
       timeout: UPLOAD_TIMEOUT,
       success: ({ statusCode, data }) => {
@@ -257,6 +295,9 @@ function failureMessage(code: string | undefined): string {
     ocr_unavailable: '云端文字识别暂不可用，请稍后重试',
     smart_unavailable: 'VPS 尚未配置智能文档识别服务',
     smart_provider_error: '智能识别服务暂未返回可用结果，请稍后重试或缩小识别范围',
+    exam_ink_ai_unavailable: 'VPS 尚未配置 AI 去笔迹检测，可使用普通候选检测或手动画笔',
+    exam_ink_provider_error: 'AI 暂未返回可用候选，可使用普通候选检测或手动画笔',
+    invalid_exam_ink_plan: '去笔迹范围或画笔数据无效，请重新调整',
     invalid_image: '云端无法读取这张图片',
     processing_timeout: '云端处理超时，请稍后重试',
     queue_timeout: '云端排队超时，请稍后重试',
@@ -287,7 +328,7 @@ function ocrResultFromResponse(raw: unknown): OcrResult {
 
 async function runCloudJob<T>(
   options: CloudTaskOptions,
-  operation: JobOperation,
+  payload: JobPayload,
   readResult: (jobPath: string, token: string) => Promise<T>,
   disposeResult?: (result: T) => void,
 ): Promise<T> {
@@ -311,7 +352,7 @@ async function runCloudJob<T>(
   let path: string | undefined;
   try {
     checkActive();
-    const submit = (token: string) => upload(options.imagePath, operation, requestId, token);
+    const submit = (token: string) => upload(options.imagePath, payload, requestId, token);
     let job: CloudJob;
     try {
       job = await activeRequest(submit);
@@ -353,11 +394,11 @@ async function runCloudJob<T>(
 }
 
 export async function runCloudEnhancement(options: EnhancementOptions): Promise<{ imagePath: string }> {
-  return { imagePath: await runCloudJob(options, options.operation, download, removeTemporaryFile) };
+  return { imagePath: await runCloudJob(options, { operation: options.operation }, download, removeTemporaryFile) };
 }
 
 export function runCloudOcr(options: CloudTaskOptions): Promise<OcrResult> {
-  return runCloudJob(options, 'ocr', async (path, token) => (
+  return runCloudJob(options, { operation: 'ocr' }, async (path, token) => (
     ocrResultFromResponse(await request(path + '/result', 'GET', token))
   ));
 }
@@ -391,7 +432,101 @@ function smartDocumentFromResponse(raw: unknown, operation: SmartOperation): Sma
 }
 
 export function runSmartDocument(options: SmartOptions): Promise<SmartDocument> {
-  return runCloudJob(options, options.operation, async (path, token) => (
+  return runCloudJob(options, { operation: options.operation }, async (path, token) => (
     smartDocumentFromResponse(await request(path + '/result', 'GET', token), options.operation)
   ));
+}
+
+function unitCoordinate(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
+}
+
+function normalizedBox(raw: unknown, message: string): ExamInkBox {
+  if (!Array.isArray(raw) || raw.length !== 4 || !raw.every(unitCoordinate)) throw new Error(message);
+  const [x, y, width, height] = raw;
+  if (x >= 1 || y >= 1 || width <= 0 || height <= 0 || x + width > 1 + 1e-6 || y + height > 1 + 1e-6) {
+    throw new Error(message);
+  }
+  return [x, y, Math.min(width, 1 - x), Math.min(height, 1 - y)];
+}
+
+function examInkCandidatesFromResponse(raw: unknown): ExamInkCandidatesResult {
+  const message = '无法读取试卷去笔迹候选';
+  const { width, height, candidates } = responseObject(raw);
+  if (typeof width !== 'number' || !Number.isSafeInteger(width) || width <= 0
+      || typeof height !== 'number' || !Number.isSafeInteger(height) || height <= 0
+      || !Array.isArray(candidates) || candidates.length > 64) {
+    throw new Error(message);
+  }
+  return {
+    width, height,
+    candidates: candidates.map((entry): ExamInkCandidate => {
+      const { box, review } = responseObject(entry);
+      if (typeof review !== 'boolean') throw new Error(message);
+      return { box: normalizedBox(box, message), review };
+    }),
+  };
+}
+
+function compactCoordinate(value: number): number {
+  return Math.round(value * 100000) / 100000;
+}
+
+function serializeExamInkPlan(plan: ExamInkPlan): string {
+  const message = failureMessage('invalid_exam_ink_plan');
+  if (!plan) throw new Error(message);
+  const { regions, erase, protect } = plan;
+  if (!Array.isArray(regions) || regions.length > 64
+      || !Array.isArray(erase) || erase.length > 48 || !Array.isArray(protect) || protect.length > 48) {
+    throw new Error(message);
+  }
+  let pointCount = 0;
+  function strokes(entries: ExamInkStroke[]): ExamInkStroke[] {
+    return entries.map((stroke) => {
+      if (!stroke || !Number.isFinite(stroke.radius) || stroke.radius <= 0 || stroke.radius > 0.1
+          || !Array.isArray(stroke.points) || !stroke.points.length || stroke.points.length > 128) {
+        throw new Error(message);
+      }
+      pointCount += stroke.points.length;
+      if (pointCount > 384) throw new Error(message);
+      return {
+        radius: Math.max(0.00001, compactCoordinate(stroke.radius)),
+        points: stroke.points.map((point): ExamInkPoint => {
+          if (!Array.isArray(point) || point.length !== 2 || !point.every(unitCoordinate)) throw new Error(message);
+          return [compactCoordinate(point[0]), compactCoordinate(point[1])];
+        }),
+      };
+    });
+  }
+  const compactRegions = regions.map((box): ExamInkBox => {
+    const [x, y, width, height] = normalizedBox(box, message);
+    const left = Math.min(0.99999, compactCoordinate(x));
+    const top = Math.min(0.99999, compactCoordinate(y));
+    return [
+      left, top,
+      Math.max(0.00001, compactCoordinate(compactCoordinate(x + width) - left)),
+      Math.max(0.00001, compactCoordinate(compactCoordinate(y + height) - top)),
+    ];
+  });
+  // Only numeric coordinates and protocol keys are serialized, so length is also its UTF-8 size.
+  const json = JSON.stringify({ regions: compactRegions, erase: strokes(erase), protect: strokes(protect) });
+  if (json.length > 12 * 1024) throw new Error(message);
+  return json;
+}
+
+function requireExamInkCloud(): void {
+  if (!cloudEnabled) throw new Error('VPS 去笔迹服务尚未配置，可先使用小程序的马赛克遮盖笔迹');
+}
+
+export async function runExamInkCandidates(options: ExamInkCandidatesOptions): Promise<ExamInkCandidatesResult> {
+  requireExamInkCloud();
+  return runCloudJob(options, { operation: options.ai ? 'exam_ink_ai_candidates' : 'exam_ink_candidates' }, async (path, token) => (
+    examInkCandidatesFromResponse(await request(path + '/result', 'GET', token))
+  ));
+}
+
+export async function runExamInkApply(options: ExamInkApplyOptions): Promise<{ imagePath: string }> {
+  requireExamInkCloud();
+  const plan = serializeExamInkPlan(options.plan);
+  return { imagePath: await runCloudJob(options, { operation: 'exam_ink_apply', plan }, download, removeTemporaryFile) };
 }

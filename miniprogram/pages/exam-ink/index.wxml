@@ -1,0 +1,93 @@
+<view class="editor">
+  <view class="panel" wx:if="{{!ready}}">
+    <view>{{error || busy || '请从扫描页打开试卷。'}}</view>
+  </view>
+
+  <block wx:else>
+    <view class="panel inspector">
+      <view class="toolbar">
+        <view class="heading">第 {{pageNumber}} 页</view>
+        <view class="controls" wx:if="{{result}}">
+          <button class="compact {{view === 'original' ? 'active' : ''}}" data-view="original" bindtap="selectView" disabled="{{!!busy}}">原图</button>
+          <button class="compact {{view === 'result' ? 'active' : ''}}" data-view="result" bindtap="selectView" disabled="{{!!busy}}">效果</button>
+        </view>
+      </view>
+      <view class="ink-frame" style="width:{{frame.width}}px;height:{{frame.height}}px"
+        catchtouchstart="startGesture" catchtouchmove="moveGesture" catchtouchend="endGesture" catchtouchcancel="cancelGesture">
+        <view class="ink-stage" style="width:{{stage.width}}px;height:{{stage.height}}px;left:{{stage.left}}px;top:{{stage.top}}px">
+          <image class="page-image" src="{{view === 'result' ? result : source}}" mode="scaleToFill" />
+          <block wx:if="{{view === 'original' && showMarks}}">
+            <block wx:for="{{regions}}" wx:key="id">
+              <view wx:if="{{item.status !== 'rejected' && item.id !== draftId}}" class="region {{item.status}} {{item.id === selected ? 'selected-region' : ''}}"
+                style="{{item.style}}" data-region="{{item.id}}">
+                <view wx:if="{{item.id === selected && tool === 'region'}}" class="region-handle" data-region="{{item.id}}" data-resize="{{true}}" aria-label="调整区域大小" />
+              </view>
+            </block>
+            <view wx:if="{{draftBox}}" class="region draft" style="{{draftBox}}" />
+            <view wx:for="{{strokes}}" wx:key="id" wx:for-item="stroke" class="stroke-layer">
+              <view wx:for="{{stroke.styles}}" wx:key="*this" class="stroke {{stroke.kind}}" style="{{item}}" />
+            </view>
+            <view wx:if="{{draftStroke.length}}" class="stroke-layer">
+              <view wx:for="{{draftStroke}}" wx:key="*this" class="stroke {{tool}}" style="{{item}}" />
+            </view>
+          </block>
+        </view>
+      </view>
+      <view class="tools bar">
+        <button class="{{tool === 'region' && view === 'original' && showMarks ? 'active' : ''}}" data-tool="region" bindtap="chooseTool" disabled="{{!!busy}}">圈选</button>
+        <button class="{{tool === 'erase' && view === 'original' && showMarks ? 'active' : ''}}" data-tool="erase" bindtap="chooseTool" disabled="{{!!busy}}">擦除笔</button>
+        <button class="{{tool === 'protect' && view === 'original' && showMarks ? 'active' : ''}}" data-tool="protect" bindtap="chooseTool" disabled="{{!!busy}}">保护笔</button>
+        <button class="{{tool === 'pan' || view === 'result' || !showMarks ? 'active' : ''}}" data-tool="pan" bindtap="chooseTool" disabled="{{!!busy}}">移动</button>
+      </view>
+      <view class="tools zoom-bar">
+        <button class="compact" data-direction="-1" bindtap="changeZoom" disabled="{{zoom === 1 || !!busy}}" aria-label="缩小">−</button>
+        <text class="zoom-level">{{zoom}}×</text>
+        <button class="compact" data-direction="1" bindtap="changeZoom" disabled="{{zoom === 4 || !!busy}}" aria-label="放大">＋</button>
+        <button wx:if="{{result && view === 'original'}}" class="compact" bindtap="toggleMarks" disabled="{{!!busy}}">{{showMarks ? '隐藏标记' : '显示标记'}}</button>
+        <button class="compact undo" bindtap="undo" disabled="{{!canUndo || !!busy}}">撤销</button>
+      </view>
+      <view class="help" wx:if="{{tool === 'region' && view === 'original' && showMarks}}">拖出新框，拖动已有框可移动，选中后拖右下角调整大小。</view>
+      <view class="brush-control" wx:if="{{view === 'original' && showMarks && (tool === 'erase' || tool === 'protect')}}">
+        <view class="help">{{tool === 'erase' ? '沿要清掉的笔迹描画。擦除笔也可能覆盖印刷字，请放大核对。' : '沿要保留的笔迹描画。重叠时优先保护。'}}</view>
+        <view class="brush-row"><text>笔刷粗细</text><slider class="brush-slider" min="3" max="36" step="1" value="{{slider}}" bindchange="changeRadius" disabled="{{!!busy}}" block-size="18" activeColor="#317365" /></view>
+      </view>
+    </view>
+
+    <view class="panel">
+      <view class="heading">候选区域</view>
+      <view class="help">提示只标出疑似位置，需逐框核对。框中只尝试清理可区分的笔迹。与印刷字交叠时可用擦除笔细画，并用保护笔保留原字。</view>
+      <view class="tools bar">
+        <button data-ai="{{false}}" bindtap="suggest" disabled="{{!enabled || !!busy}}">VPS 提示</button>
+        <button data-ai="{{true}}" bindtap="suggest" disabled="{{!enabled || !!busy}}">DeepSeek 提示</button>
+      </view>
+      <view wx:if="{{regions.length}}" class="regions">
+        <view class="area" wx:for="{{regions}}" wx:key="id">
+          <button class="area-label {{selected === item.id ? 'active' : ''}}" data-id="{{item.id}}" bindtap="selectRegion" disabled="{{!!busy}}">
+            <text>区域 {{index + 1}}</text>
+            <text class="area-status">{{item.status === 'accepted' ? '已采用' : (item.status === 'rejected' ? '已忽略' : (item.review ? '需重点核对' : '待核对'))}}</text>
+          </button>
+          <button wx:if="{{item.status === 'pending'}}" class="compact" data-id="{{item.id}}" data-status="accepted" bindtap="reviewRegion" disabled="{{!!busy}}">采用</button>
+          <button wx:if="{{item.status !== 'rejected'}}" class="compact" data-id="{{item.id}}" data-status="rejected" bindtap="reviewRegion" disabled="{{!!busy}}">忽略</button>
+          <button wx:else class="compact" data-id="{{item.id}}" data-status="pending" bindtap="reviewRegion" disabled="{{!!busy}}">重新核对</button>
+          <button wx:if="{{item.status === 'rejected'}}" class="compact" data-id="{{item.id}}" data-status="removed" bindtap="reviewRegion" disabled="{{!!busy}}">移除</button>
+        </view>
+      </view>
+      <view class="help" wx:if="{{pending || accepted}}">已采用 {{accepted}} 个，待核对 {{pending}} 个。预览仅处理已采用的框和擦除笔标记。</view>
+      <view class="help" wx:if="{{!enabled}}">圈选和画笔可先使用。生成擦除预览需要配置 VPS。</view>
+    </view>
+
+    <view class="panel">
+      <view class="progress" aria-role="status" wx:if="{{busy}}">
+        <text>{{busy}}</text>
+        <button class="compact" wx:if="{{running}}" bindtap="cancelRun">取消</button>
+      </view>
+      <view class="notice" wx:if="{{error}}" aria-role="status">{{error}}</view>
+      <button class="primary full" bindtap="preview" disabled="{{!enabled || !canApply || !!busy}}">生成擦除预览</button>
+      <view class="help" wx:if="{{result}}">在上方切换原图和效果，核对题干、数字和图形后再保存。</view>
+      <view class="tools actions" wx:if="{{result}}">
+        <button bindtap="save" disabled="{{!!busy}}">保存图片</button>
+        <button wx:if="{{canAdopt}}" class="primary" bindtap="adopt" disabled="{{!!busy}}">应用到扫描页</button>
+      </view>
+    </view>
+  </block>
+</view>

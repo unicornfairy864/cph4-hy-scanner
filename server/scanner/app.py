@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import hashlib
 import hmac
 from io import BytesIO
+import json
 import logging
 import os
 from pathlib import Path
@@ -19,6 +20,8 @@ from starlette.datastructures import Headers, UploadFile
 from starlette.formparsers import MultiPartException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from scanner.exam_ink_ai import erase_ai_config
+from scanner.exam_ink_protocol import APPLY_OPERATION, MAX_PLAN_BYTES, InvalidInkPlan, parse_plan
 from scanner.jobs import JSON_OPERATIONS, OPERATIONS, Job, JobService, QueueFull, RequestConflict
 from scanner.smart import SMART_OPERATIONS, ProviderConfig
 
@@ -205,22 +208,34 @@ def create_app(
         owner = authenticate(request, settings)
         if request.headers.get("content-type", "").partition(";")[0].strip().lower() != "multipart/form-data":
             raise HTTPException(415, "Use multipart/form-data")
-        async with request.form(max_files=1, max_fields=2, max_part_size=512) as form:
+        plan = None
+        async with request.form(max_files=1, max_fields=3, max_part_size=MAX_PLAN_BYTES) as form:
             operation = form.get("operation")
             request_id = form.get("clientRequestId")
             file = form.get("file")
-            if (len(form.multi_items()) != 3 or operation not in OPERATIONS
-                    or not isinstance(request_id, str)
+            expected_fields = {"file", "operation", "clientRequestId"}
+            if "plan" in form and operation == APPLY_OPERATION:
+                expected_fields.add("plan")
+            if (len(form.multi_items()) != len(expected_fields) or set(form.keys()) != expected_fields
+                    or operation not in OPERATIONS or not isinstance(request_id, str)
                     or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", request_id)
                     or not isinstance(file, UploadFile)):
-                raise HTTPException(422, "Provide file, operation and a valid clientRequestId")
+                raise HTTPException(422, "Provide file, operation, clientRequestId and plan only for ink apply")
             if operation in SMART_OPERATIONS and ProviderConfig.from_env() is None:
                 raise HTTPException(503, {"code": "smart_unavailable"})
+            if operation == "exam_ink_ai_candidates" and erase_ai_config() is None:
+                raise HTTPException(503, {"code": "exam_ink_ai_unavailable"})
+            if operation == APPLY_OPERATION:
+                try:
+                    plan = json.dumps(parse_plan(form.get("plan")), separators=(",", ":")).encode()
+                except InvalidInkPlan:
+                    raise HTTPException(422, {"code": "invalid_exam_ink_plan"}) from None
             contents = await file.read(settings.max_bytes + 1)
         validate_image(contents, settings)
-        digest = hashlib.sha256(contents).hexdigest()
+        image_hash = hashlib.sha256(contents)
+        digest = hashlib.sha256(image_hash.digest() + plan) if plan is not None else image_hash
         try:
-            return jobs.submit(owner, request_id, digest, operation, contents).as_dict()
+            return jobs.submit(owner, request_id, digest.hexdigest(), operation, contents, plan).as_dict()
         except QueueFull:
             raise HTTPException(429, "Enhancement queue or retained task limit reached",
                                 headers={"Retry-After": "5"}) from None

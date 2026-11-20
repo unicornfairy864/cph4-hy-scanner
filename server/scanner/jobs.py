@@ -12,13 +12,18 @@ from time import monotonic
 from typing import Literal
 from uuid import uuid4
 
+from scanner.exam_ink_ai import ERASE_AI_ENVIRONMENT
+from scanner.exam_ink_protocol import APPLY_OPERATION, CANDIDATE_OPERATIONS
 from scanner.smart import AI_ENVIRONMENT, SMART_OPERATIONS
 
 
-Operation = Literal["dewarp", "deshadow", "ocr", "receipt", "identity", "exam", "clarify", "exam_restore"]
+Operation = Literal[
+    "dewarp", "deshadow", "ocr", "receipt", "identity", "exam", "clarify", "exam_restore",
+    "exam_ink_candidates", "exam_ink_ai_candidates", "exam_ink_apply",
+]
 RESTORATION_OPERATIONS = ("clarify", "exam_restore")
-JSON_OPERATIONS = ("ocr", *SMART_OPERATIONS)
-OPERATIONS = ("dewarp", "deshadow", *JSON_OPERATIONS, *RESTORATION_OPERATIONS)
+JSON_OPERATIONS = ("ocr", *SMART_OPERATIONS, *CANDIDATE_OPERATIONS)
+OPERATIONS = ("dewarp", "deshadow", *JSON_OPERATIONS, *RESTORATION_OPERATIONS, APPLY_OPERATION)
 Status = Literal["queued", "running", "succeeded", "failed"]
 LOGGER = logging.getLogger(__name__)
 
@@ -28,6 +33,8 @@ ERRORS = {
     "ocr_unavailable": "Install Tesseract and its Simplified Chinese and English language data.",
     "smart_unavailable": "Smart document recognition is not configured.",
     "smart_provider_error": "The document provider did not return a usable result.",
+    "exam_ink_ai_unavailable": "AI ink detection is not configured.",
+    "exam_ink_provider_error": "The AI ink provider did not return usable candidate regions.",
     "processing_error": "Enhancement could not be completed.",
     "processing_timeout": "Enhancement timed out.",
     "queue_timeout": "The queued task expired before processing.",
@@ -58,6 +65,10 @@ class Job:
     @property
     def source(self) -> Path:
         return self.directory / "source.jpg"
+
+    @property
+    def plan(self) -> Path:
+        return self.directory / "plan.json"
 
     @property
     def output(self) -> Path:
@@ -128,6 +139,7 @@ class JobService:
 
     def submit(
         self, owner: str, request_id: str, digest: str, operation: Operation, contents: bytes,
+        plan: bytes | None = None,
     ) -> Job:
         self._expire_jobs()
         request_key = (owner, request_id)
@@ -151,6 +163,8 @@ class JobService:
         job.directory.mkdir(mode=0o700)
         try:
             job.source.write_bytes(contents)
+            if plan is not None:
+                job.plan.write_bytes(plan)
         except BaseException:
             self._remove_files(job)
             raise
@@ -190,12 +204,12 @@ class JobService:
         job.status = "failed" if error else "succeeded"
         job.error = error
         job.expires_at = monotonic() + self.ttl
-        try:
-            job.source.unlink(missing_ok=True)
-            if error:
-                job.output.unlink(missing_ok=True)
-        except OSError:
-            LOGGER.error("Could not immediately remove an enhancement job file")
+        files = (job.source, job.plan, job.output) if error else (job.source, job.plan)
+        for file in files:
+            try:
+                file.unlink(missing_ok=True)
+            except OSError:
+                LOGGER.error("Could not immediately remove an enhancement job file")
 
     def _expire(self, job: Job) -> None:
         if job.status == "queued":
@@ -243,6 +257,8 @@ class JobService:
                        if key in os.environ}
         if job.operation in SMART_OPERATIONS:
             environment.update({key: os.environ[key] for key in AI_ENVIRONMENT if key in os.environ})
+        elif job.operation == "exam_ink_ai_candidates":
+            environment.update({key: os.environ[key] for key in ERASE_AI_ENVIRONMENT if key in os.environ})
         environment.update(OPENBLAS_NUM_THREADS="1", OMP_NUM_THREADS="1", MKL_NUM_THREADS="1",
                            PYTHONDONTWRITEBYTECODE="1")
         self.process = await asyncio.create_subprocess_exec(
@@ -271,5 +287,6 @@ class JobService:
             errors = {
                 2: "unsupported_page", 3: "invalid_image", 4: "ocr_unavailable",
                 5: "smart_unavailable", 6: "smart_provider_error",
+                7: "exam_ink_ai_unavailable", 8: "exam_ink_provider_error",
             }
             self._finish(job, errors.get(code, "processing_error"))

@@ -1,5 +1,6 @@
 import asyncio
 from io import BytesIO
+import json
 import os
 from pathlib import Path
 import sys
@@ -98,10 +99,12 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         return {"Authorization": "Bearer " + response.json()["accessToken"]}
 
-    async def submit(self, headers, request_id="example", operation="deshadow", source=None):
+    async def submit(self, headers, request_id="example", operation="deshadow", source=None, plan=None):
+        data = {"operation": operation, "clientRequestId": request_id}
+        if plan is not None:
+            data["plan"] = plan
         return await self.client.post(
-            "/v1/jobs", headers=headers,
-            data={"operation": operation, "clientRequestId": request_id},
+            "/v1/jobs", headers=headers, data=data,
             files={"file": ("page.jpg", jpeg(shadowed_page()) if source is None else source,
                             "image/jpeg")},
         )
@@ -275,6 +278,87 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(1.05)
             self.assertFalse(escaped.exists())
             self.assertFalse((self.settings.data_dir / "jobs" / job_id).exists())
+
+    async def test_exam_ink_local_candidates_and_apply_require_no_provider(self):
+        alice = await self.headers()
+        bob = await self.headers("bob")
+        with patch.dict(os.environ, {"SCANNER_ERASE_AI_MODEL": ""}):
+            candidate_job = await self.submit(alice, operation="exam_ink_candidates")
+            self.assertEqual(candidate_job.status_code, 202, candidate_job.text)
+            path = "/v1/jobs/" + candidate_job.json()["jobId"]
+            self.assertEqual((await self.wait_for_job(alice, path)).json()["status"], "succeeded")
+            result = await self.client.get(path + "/result", headers=alice)
+            self.assertEqual(result.headers["content-type"], "application/json")
+            self.assertEqual(result.headers["cache-control"], "private, no-store")
+            result = result.json()
+            self.assertEqual((result["width"], result["height"]), (660, 800))
+            self.assertIsInstance(result["candidates"], list)
+            self.assertEqual((await self.client.get(path + "/result", headers=bob)).status_code, 404)
+
+            plan = {"regions": [], "erase": [{"points": [[0.1, 0.12]], "radius": 0.02}], "protect": []}
+            submit = await self.submit(alice, request_id="apply", operation="exam_ink_apply", plan=json.dumps(plan))
+            self.assertEqual(submit.status_code, 202, submit.text)
+            job_id = submit.json()["jobId"]
+            path = f"/v1/jobs/{job_id}"
+            same = await self.submit(alice, request_id="apply", operation="exam_ink_apply",
+                                     plan=json.dumps(plan, sort_keys=True, separators=(",", ":")))
+            self.assertEqual(same.json()["jobId"], job_id)
+            plan["erase"][0]["radius"] = 0.03
+            different = await self.submit(alice, request_id="apply", operation="exam_ink_apply", plan=json.dumps(plan))
+            self.assertEqual(different.status_code, 409)
+            self.assertEqual((await self.wait_for_job(alice, path)).json()["status"], "succeeded")
+            result = await self.client.get(path + "/result", headers=alice)
+            self.assertEqual(result.headers["content-type"], "image/jpeg")
+            with Image.open(BytesIO(result.content)) as image:
+                self.assertEqual(image.size, (660, 800))
+            directory = self.settings.data_dir / "jobs" / job_id
+            self.assertEqual([file.name for file in directory.iterdir()], ["result.jpg"])
+            self.assertEqual((await self.client.delete(path, headers=alice)).status_code, 204)
+            self.assertFalse(directory.exists())
+
+    async def test_ink_apply_rejects_missing_or_invalid_plan_and_ai_requires_config(self):
+        token = await self.headers()
+        for plan in (None, '{}', '{"regions":[],"erase":[{"points":[],"radius":0.04}],"protect":[]}'):
+            response = await self.submit(token, operation="exam_ink_apply", plan=plan)
+            self.assertEqual(response.status_code, 422)
+            self.assertEqual(response.json()["detail"]["code"], "invalid_exam_ink_plan")
+        response = await self.submit(token, operation="exam_ink_candidates", plan="{}")
+        self.assertEqual(response.status_code, 422)
+        with patch.dict(os.environ, {"SCANNER_ERASE_AI_MODEL": ""}):
+            response = await self.submit(token, operation="exam_ink_ai_candidates")
+            self.assertEqual(response.status_code, 503)
+            self.assertEqual(response.json()["detail"]["code"], "exam_ink_ai_unavailable")
+        self.assertEqual(list((self.settings.data_dir / "jobs").iterdir()), [])
+
+    async def test_ink_ai_uses_only_dedicated_credentials(self):
+        token = await self.headers()
+        provider = {"SCANNER_ERASE_AI_BASE_URL": "https://api.deepseek.com",
+                    "SCANNER_ERASE_AI_API_KEY": "ink-mock-key", "SCANNER_ERASE_AI_MODEL": "deepseek-flash"}
+
+        class CompletedWorker:
+            async def wait(self):
+                return 0
+
+        async def worker(*args, env, **kwargs):
+            self.assertEqual(args[3], "exam_ink_ai_candidates")
+            for key, value in provider.items():
+                self.assertEqual(env[key], value)
+            self.assertNotIn("SCANNER_AI_API_KEY", env)
+            self.assertNotIn("WECHAT_APP_SECRET", env)
+            Path(args[5]).write_text('{"width":660,"height":800,"candidates":[]}')
+
+            return CompletedWorker()
+
+        with patch.dict(os.environ, {**provider, "SCANNER_AI_API_KEY": "unrelated-mock-key"}), patch(
+            "scanner.jobs.asyncio.create_subprocess_exec", worker,
+        ):
+            submit = await self.submit(token, operation="exam_ink_ai_candidates")
+            self.assertEqual(submit.status_code, 202)
+            path = "/v1/jobs/" + submit.json()["jobId"]
+            self.assertEqual((await self.wait_for_job(token, path)).json()["status"], "succeeded")
+        result = await self.client.get(path + "/result", headers=token)
+        self.assertEqual(result.headers["content-type"], "application/json")
+        self.assertEqual(result.json(), {"width": 660, "height": 800, "candidates": []})
 
     async def test_smart_jobs_without_configuration_do_not_create_task_files(self):
         token = await self.headers()
