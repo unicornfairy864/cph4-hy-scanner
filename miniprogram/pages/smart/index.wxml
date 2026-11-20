@@ -1,10 +1,5 @@
 <view class="smart-page">
-  <view class="tab-row" wx:if="{{pageNumber}}">
-    <button class="tab {{tab === 'tools' ? 'active' : ''}}" data-tab="tools" bindtap="selectTab" disabled="{{!!busy}}">当前页工具</button>
-    <button class="tab {{tab === 'archive' ? 'active' : ''}}" data-tab="archive" bindtap="selectTab" disabled="{{!!busy}}">错题归档</button>
-  </view>
-
-  <block wx:if="{{tab === 'tools' && pageNumber}}">
+  <block wx:if="{{pageNumber}}">
     <view class="panel">
       <view class="preview-bar">
         <view class="heading">第 {{pageNumber}} 页</view>
@@ -33,7 +28,7 @@
           data-index="{{index}}" bindtap="selectTool" disabled="{{!!busy}}">{{item.title}}</button>
       </view>
       <view class="note">{{tools[selectedTool].detail}}</view>
-      <view wx:if="{{!enabled}}" class="notice">云端功能尚未配置。错题归档仍可使用。</view>
+      <view wx:if="{{!enabled}}" class="notice">云端功能尚未配置。</view>
       <button wx:if="{{!running}}" class="primary process-button" bindtap="requestProcessing" disabled="{{!enabled || !!busy}}">
         {{tools[selectedTool].operation === 'exam_restore' ? '擦除红蓝笔迹' : (image || document ? '重新处理当前页' : '处理当前页')}}
       </button>
@@ -60,7 +55,7 @@
         <button class="secondary process-button" bindtap="copyFields">复制字段</button>
       </view>
       <block wx:if="{{items.length}}">
-        <view class="note">请查看原页核对题目和批改，再选择要收录的错题。</view>
+        <view class="note">请对照原页核对识别结果。</view>
         <view class="question" wx:for="{{items}}" wx:key="position">
           <view class="question-bar">
             <text class="question-title">{{item.number ? '题号 ' + item.number : '题目 ' + (index + 1)}}</text>
@@ -71,37 +66,10 @@
           <view class="question-detail" wx:if="{{item.referenceAnswer}}">参考答案　{{item.referenceAnswer}}</view>
           <view class="question-detail" wx:if="{{item.correction}}">批改　{{item.correction}}</view>
           <view class="question-detail" wx:if="{{item.evidence}}">依据　{{item.evidence}}</view>
-          <button wx:if="{{item.status !== 'correct' && item.question}}" class="secondary select-question {{item.selected ? 'active' : ''}}"
-            data-index="{{index}}" bindtap="selectReviewItem" disabled="{{!!busy}}">
-            {{item.selected ? '已选 · 取消' : (item.status === 'uncertain' ? '人工确认错题' : '选择此题')}}
-          </button>
         </view>
-        <button class="primary process-button" bindtap="archiveSelected" disabled="{{!selectedCount || !!busy}}">收录已选错题{{selectedCount ? '（' + selectedCount + '）' : ''}}</button>
       </block>
     </view>
   </block>
-
-  <view class="panel" wx:elif="{{tab === 'archive'}}">
-    <view class="question-bar">
-      <view class="heading">错题归档</view>
-      <text class="note">{{archived.length}} 题</text>
-    </view>
-    <view class="note">归档保存在此设备。导出 PDF 后可保存或转发，用于打印。</view>
-    <button wx:if="{{archived.length}}" class="primary process-button" bindtap="printArchive" disabled="{{!!busy}}">{{busy || '导出全部错题 PDF'}}</button>
-    <view class="empty" wx:else>暂无归档。识别试卷后可选择错题收录。</view>
-    <view class="question" wx:for="{{archived}}" wx:key="id">
-      <view class="question-bar">
-        <text class="question-title">{{item.number ? '题号 ' + item.number : '错题 ' + (index + 1)}}</text>
-        <button class="secondary compact remove" data-id="{{item.id}}" bindtap="removeArchived" disabled="{{!!busy}}" aria-label="移除这道错题">移除</button>
-      </view>
-      <view class="question-detail" wx:if="{{item.source}}">{{item.source}}</view>
-      <text class="question-text" user-select="{{true}}">{{item.question}}</text>
-      <view class="question-detail" wx:if="{{item.studentAnswer}}">作答　{{item.studentAnswer}}</view>
-      <view class="question-detail" wx:if="{{item.referenceAnswer}}">参考答案　{{item.referenceAnswer}}</view>
-      <view class="question-detail" wx:if="{{item.correction}}">批改　{{item.correction}}</view>
-      <view class="question-detail" wx:if="{{item.evidence}}">依据　{{item.evidence}}</view>
-    </view>
-  </view>
 
   <view class="panel empty" wx:else>请返回扫描页选择要处理的文档。</view>
 </view>

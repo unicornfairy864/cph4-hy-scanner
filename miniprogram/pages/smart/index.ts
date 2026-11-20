@@ -1,16 +1,12 @@
 import { decorateImage, renderPage } from '../../image'
 import { runCloudEnhancement, runSmartDocument, smartEnabled } from '../../services/cloud'
 import type { CloudStatus, SmartDocument } from '../../services/cloud'
-import { writeScanPdf } from '../../services/pdf'
 import type { ExportPage } from '../export/session'
-import { loadArchive, MAX_ARCHIVED_QUESTIONS, mergeArchive, persistArchive } from './archive'
-import type { WrongQuestion } from './archive'
-import { createWrongQuestionsPdf } from './print'
 
 type TextOperation = 'exam' | 'receipt' | 'identity'
 type ImageOperation = 'exam_restore' | 'clarify'
 type Operation = TextOperation | ImageOperation
-type ReviewItem = SmartDocument['items'][number] & { position: number; selected: boolean }
+type ReviewItem = SmartDocument['items'][number] & { position: number }
 type ReviewField = SmartDocument['fields'][number] & { position: number }
 type DocumentResult = Omit<SmartDocument, 'items' | 'fields'> & { fields: ReviewField[] }
 
@@ -20,7 +16,7 @@ interface SmartSession {
 }
 
 const tools: Array<{ operation: Operation; title: string; detail: string; image: boolean }> = [
-  { operation: 'exam', title: '识别错题', detail: '从当前页提取题目、作答和可辨认的批改依据。核对后可收录错题。', image: false },
+  { operation: 'exam', title: '识别错题', detail: '从当前页提取题目、作答和可辨认的批改依据，标出疑似错题。', image: false },
   { operation: 'exam_restore', title: '试卷擦除', detail: '减淡部分红蓝笔迹。被遮住的原字或同色印刷内容可能无法保留，请先对照原页。', image: true },
   { operation: 'receipt', title: '票据识别', detail: '提取票据名称、日期、金额等可辨认字段。请核对标为存疑的结果。', image: false },
   { operation: 'identity', title: '证件识别', detail: '提取证件类型与可辨认字段。请确认要上传的页面及其中的个人信息。', image: false },
@@ -37,7 +33,6 @@ const pendingText: Record<CloudStatus, string> = {
 interface SmartData {
   enabled: boolean
   tools: typeof tools
-  tab: 'tools' | 'archive'
   pageNumber: number
   protectedPage: boolean
   source: string
@@ -49,11 +44,9 @@ interface SmartData {
   message: string
   document: DocumentResult | null
   items: ReviewItem[]
-  selectedCount: number
   image: string
   comparisonSource: string
   compare: 'result' | 'source'
-  archived: WrongQuestion[]
 }
 
 interface SmartActions {
@@ -65,12 +58,9 @@ interface SmartActions {
   resultPath?: string
   comparisonPath?: string
   savingPath?: string
-  previousPdf?: string
-  onLoad(query?: Record<string, string | undefined>): void
-  onShow(): void
+  onLoad(): void
   onUnload(): void
   preparePreview(session: SmartSession): Promise<void>
-  selectTab(event: WechatMiniprogram.TouchEvent): void
   selectTool(event: WechatMiniprogram.TouchEvent): void
   selectCompare(event: WechatMiniprogram.TouchEvent): void
   requestProcessing(): void
@@ -79,10 +69,6 @@ interface SmartActions {
   cancelProcessing(): void
   clearResult(): void
   copyFields(): void
-  selectReviewItem(event: WechatMiniprogram.TouchEvent): void
-  archiveSelected(): void
-  removeArchived(event: WechatMiniprogram.TouchEvent): void
-  printArchive(): Promise<void>
   saveResult(): Promise<void>
   transferImageToScan(imagePath: string): boolean
   adoptResult(): void
@@ -127,16 +113,15 @@ function usesExamColor(operation: Operation): boolean {
 
 Page<SmartData, SmartActions>({
   data: {
-    enabled: smartEnabled, tools, tab: 'tools', pageNumber: 0, protectedPage: false,
+    enabled: smartEnabled, tools, pageNumber: 0, protectedPage: false,
     source: '', sourcePending: false, sourceError: '', selectedTool: 0, busy: '', running: false,
-    message: '', document: null, items: [], selectedCount: 0, image: '', comparisonSource: '', compare: 'result', archived: [],
+    message: '', document: null, items: [], image: '', comparisonSource: '', compare: 'result',
   },
   closed: false,
   turn: 0,
   confirming: false,
 
-  onLoad(query) {
-    if (query?.archive === '1') this.setData({ tab: 'archive' })
+  onLoad() {
     this.getOpenerEventChannel?.()?.on?.('smartPage', (session: SmartSession) => {
       if (this.closed || this.session || !session?.page?.imagePath || !Number.isInteger(session.number) || session.number < 1) return
       this.session = session
@@ -145,21 +130,12 @@ Page<SmartData, SmartActions>({
     })
   },
 
-  onShow() {
-    try {
-      this.setData({ archived: loadArchive() })
-    } catch {
-      wx.showToast({ title: '无法读取此设备上的错题归档。', icon: 'none' })
-    }
-  },
-
   onUnload() {
     this.closed = true
     this.turn += 1
     unlink(this.previewPath)
     unlink(this.comparisonPath)
     if (this.resultPath !== this.savingPath) unlink(this.resultPath)
-    unlink(this.previousPdf)
   },
 
   async preparePreview(session) {
@@ -181,11 +157,6 @@ Page<SmartData, SmartActions>({
     } finally {
       if (!this.closed) this.setData({ sourcePending: false })
     }
-  },
-
-  selectTab(event) {
-    const tab: unknown = event.currentTarget.dataset.tab
-    if (!this.data.busy && (tab === 'tools' || tab === 'archive')) this.setData({ tab })
   },
 
   selectTool(event) {
@@ -286,7 +257,7 @@ Page<SmartData, SmartActions>({
         const message = fields.length || items.length ? '' : '没有识别到可用结果。请检查页面方向和清晰度。'
         this.setData({
           document: { ...result, fields: fields.map((field, position) => ({ ...field, position })) },
-          items: items.map((item, position) => ({ ...item, position, selected: false })),
+          items: items.map((item, position) => ({ ...item, position })),
           message,
         })
       } else {
@@ -318,7 +289,7 @@ Page<SmartData, SmartActions>({
     unlink(this.comparisonPath)
     this.resultPath = undefined
     this.comparisonPath = undefined
-    this.setData({ document: null, items: [], selectedCount: 0, image: '', comparisonSource: '', compare: 'result', message: '' })
+    this.setData({ document: null, items: [], image: '', comparisonSource: '', compare: 'result', message: '' })
   },
 
   copyFields() {
@@ -326,103 +297,6 @@ Page<SmartData, SmartActions>({
     if (!fields?.length) return
     const data = fields.map(({ label, value, uncertain }) => `${label}：${value || '未识别'}${uncertain ? '（存疑）' : ''}`).join('\n')
     wx.setClipboardData({ data, fail: () => wx.showToast({ title: '复制失败，请重试。', icon: 'none' }) })
-  },
-
-  selectReviewItem(event) {
-    const index = Number(event.currentTarget.dataset.index)
-    const item = this.data.items[index]
-    if (!item?.question.trim() || item.status === 'correct' || this.data.busy) return
-    const toggle = () => {
-      if (this.closed || this.data.items[index] !== item) return
-      const items = this.data.items.map((entry, position) => position === index ? { ...entry, selected: !entry.selected } : entry)
-      const selectedCount = items.filter(({ selected }) => selected).length
-      this.setData({ items, selectedCount })
-    }
-    if (item.status !== 'uncertain' || item.selected) toggle()
-    else wx.showModal({
-      title: '人工确认错题',
-      content: '此题的批改结果存疑。仅在核对原卷并确认答错后收录。',
-      confirmText: '确认错题',
-      success: ({ confirm }) => { if (confirm) toggle() },
-    })
-  },
-
-  archiveSelected() {
-    if (this.data.busy || !this.data.selectedCount) return
-    const title = this.data.document?.title.trim()
-    const source = title ? `${title} · 第 ${this.data.pageNumber} 页` : `扫描第 ${this.data.pageNumber} 页`
-    try {
-      const current = loadArchive()
-      const submitted = this.data.items.filter(({ selected }) => selected)
-        .map(({ question, number, studentAnswer, referenceAnswer, correction, evidence }) => (
-          { source, question, number, studentAnswer, referenceAnswer, correction, evidence }
-        ))
-      const result = mergeArchive(current, submitted)
-      if (result.added) {
-        persistArchive(result.entries)
-        const items = this.data.items.map((item) => ({ ...item, selected: false }))
-        this.setData({ archived: result.entries, items, selectedCount: 0 })
-      }
-      wx.showToast({
-        title: result.added
-          ? (result.entries.length === MAX_ARCHIVED_QUESTIONS
-            ? `已收录 ${result.added} 题，归档已满`
-            : `已收录 ${result.added} 道错题`)
-          : (current.length >= MAX_ARCHIVED_QUESTIONS ? '归档已满，请先移除旧错题。' : '所选错题已收录。'),
-        icon: 'none',
-      })
-    } catch {
-      wx.showToast({ title: '无法保存到本机错题归档。', icon: 'none' })
-    }
-  },
-
-  removeArchived(event) {
-    const id: unknown = event.currentTarget.dataset.id
-    if (typeof id !== 'string' || this.data.busy) return
-    wx.showModal({
-      title: '移除这道错题？',
-      confirmText: '移除',
-      success: ({ confirm }) => {
-        if (!confirm || this.closed || this.data.busy) return
-        try {
-          const archived = loadArchive().filter((item) => item.id !== id)
-          persistArchive(archived)
-          this.setData({ archived })
-        } catch {
-          wx.showToast({ title: '无法更新错题归档。', icon: 'none' })
-        }
-      },
-    })
-  },
-
-  async printArchive() {
-    if (!this.data.archived.length || this.data.busy) return
-    const archived = this.data.archived
-    this.setData({ busy: '正在生成错题 PDF' })
-    const stamp = Date.now()
-    const filePath = `${wx.env.USER_DATA_PATH}/错题整理-${stamp}.pdf`
-    try {
-      const bytes = await createWrongQuestionsPdf(archived, () => this.closed)
-      if (this.closed) return
-      await writeScanPdf(filePath, bytes)
-      if (this.closed) {
-        unlink(filePath)
-        return
-      }
-      await new Promise<void>((resolve, reject) => {
-        wx.openDocument({ filePath, fileType: 'pdf', showMenu: true, success: () => resolve(), fail: reject })
-      })
-      if (this.closed) unlink(filePath)
-      else {
-        unlink(this.previousPdf)
-        this.previousPdf = filePath
-      }
-    } catch (error) {
-      unlink(filePath)
-      if (!this.closed) wx.showToast({ title: describe(error, '无法导出错题 PDF。'), icon: 'none' })
-    } finally {
-      if (!this.closed) this.setData({ busy: '' })
-    }
   },
 
   async saveResult() {
