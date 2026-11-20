@@ -24,13 +24,16 @@
     </view>
 
     <view class="panel">
-      <view class="heading">处理工具</view>
+      <view class="heading cloud-heading">
+        <image class="cloud-icon" src="/assets/cloud.svg" mode="aspectFit" aria-hidden="true" />
+        <text>云端功能</text>
+      </view>
       <view class="tool-grid">
         <button wx:for="{{tools}}" wx:key="operation" class="tool {{selectedTool === index ? 'active' : ''}}"
           data-index="{{index}}" bindtap="selectTool" disabled="{{!!busy}}">{{item.title}}</button>
       </view>
       <view class="note">{{tools[selectedTool].detail}}</view>
-      <view wx:if="{{!enabled}}" class="notice">尚未配置处理 VPS，仍可使用本机错题归档。</view>
+      <view wx:if="{{!enabled}}" class="notice">云端功能尚未配置。错题归档仍可使用。</view>
       <button wx:if="{{!running}}" class="primary process-button" bindtap="requestProcessing" disabled="{{!enabled || !!busy}}">
         {{tools[selectedTool].operation === 'exam_restore' ? '擦除红蓝笔迹' : (image || document ? '重新处理当前页' : '处理当前页')}}
       </button>

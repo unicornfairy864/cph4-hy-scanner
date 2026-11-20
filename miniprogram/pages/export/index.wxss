@@ -6,7 +6,7 @@ page { background: #f2f5f1; color: #142923; font-family: -apple-system, BlinkMac
 .preview-frame { background: #152b25; border-radius: 18rpx; height: 44vh; max-height: 860rpx; overflow: hidden; position: relative; }
 .preview-sheet { position: absolute; background: #fff; overflow: hidden; }
 .preview-image { display: block; height: 100%; left: 50%; position: absolute; top: 50%; transform: translate(-50%,-50%); width: 100%; }
-button.preview-arrow { align-items: center; background: #152b25cc; border: 1rpx solid #f2fff34d; border-radius: 50%; color: #fff; display: flex; font-size: 48rpx; height: 72rpx; justify-content: center; min-height: 72rpx; padding: 0 0 4rpx; position: absolute; top: 50%; transform: translateY(-50%); width: 72rpx; z-index: 2; }
+button.preview-arrow { align-items: center; background: #152b25cc; border: 1rpx solid #f2fff34d; border-radius: 16rpx; color: #fff; display: flex; font-size: 48rpx; height: 44px; justify-content: center; min-height: 44px; min-width: 44px; padding: 0 0 4rpx; position: absolute; top: 50%; transform: translateY(-50%); width: 44px; z-index: 2; }
 .preview-prev { left: 10rpx; }
 .preview-next { right: 10rpx; }
 .preview-count { background: #152b25cc; border-radius: 18rpx; bottom: 12rpx; color: #fff; font-size: 24rpx; padding: 5rpx 12rpx; pointer-events: none; position: absolute; right: 12rpx; z-index: 2; }
@@ -15,9 +15,14 @@ button.preview-retry { min-height: 58rpx; padding: 12rpx 24rpx; }
 .signature-overlay { outline: 1rpx dashed #77998c; outline-offset: 4rpx; position: absolute; touch-action: none; z-index: 1; }
 .signature-overlay::before { bottom: -12rpx; content: ''; left: -12rpx; position: absolute; right: -12rpx; top: -12rpx; }
 .signature-segment { background: #14211f; border-radius: 50px; pointer-events: none; position: absolute; transform-origin: top left; }
+.signature-image { display: block; height: 100%; pointer-events: none; width: 100%; }
+.page-guide { align-items: center; color: #62736c; display: flex; font-size: 23rpx; height: 100%; justify-content: center; pointer-events: none; }
 .signature-hint { color: #586963; font-size: 25rpx; margin-top: 12rpx; }
-button.signature-all { margin-top: 12rpx; width: 100%; }
-button.signing-switch { margin-top: 24rpx; width: 100%; }
+button.cloud-preview-button { align-items: center; display: flex; gap: 8rpx; justify-content: center; }
+.cloud-preview-icon { flex: none; height: 30rpx; width: 30rpx; }
+.signing-switch { margin-top: 24rpx; width: 100%; }
+.range-row { align-items: center; color: #586963; display: flex; gap: 14rpx; margin-top: 14rpx; }
+.range-row input.range-input { flex: 1; margin-top: 0; min-width: 0; text-align: center; }
 .export-field { margin-top: 30rpx; }
 .field-label { color: #29463e; font-size: 28rpx; font-weight: 600; }
 .export-field input { background: #f2f6f3; border-radius: 16rpx; font-size: 28rpx; height: 80rpx; margin-top: 12rpx; padding: 0 20rpx; }

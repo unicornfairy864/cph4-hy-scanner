@@ -2,18 +2,24 @@
   <view class="export-card" wx:if="{{pageCount}}">
     <view class="existing-pdf" wx:if="{{existingPdfName}}">
       <view class="field-label pdf-name">{{existingPdfName}}</view>
-      <view class="signature-hint">此处显示页面边界，供放置手写签名。</view>
+      <view wx:if="{{!preview}}" class="signature-hint">当前显示签名定位框。可在微信查看原 PDF。</view>
       <view class="choice-row">
-        <button class="choice" bindtap="openOriginalPdf" disabled="{{!!busy}}">查看原 PDF</button>
-        <button class="choice" bindtap="restoreScanDraft" disabled="{{!!busy}}" wx:if="{{hasScans}}">返回扫描件</button>
-        <button class="choice" bindtap="chooseExistingPdf" disabled="{{!!busy}}" wx:else>更换 PDF</button>
+        <button class="choice" bindtap="openOriginalPdf" disabled="{{!!busy}}">预览原 PDF</button>
+        <button class="choice cloud-preview-button" bindtap="requestCloudPdfPreview" disabled="{{!!busy}}" wx:if="{{cloudPreviewAvailable && !preview}}">
+          <image class="cloud-preview-icon" src="/assets/cloud.svg" mode="aspectFit" aria-hidden="true" />
+          <text>云端预览本页</text>
+        </button>
       </view>
+      <button wx:if="{{cloudPreviewRunning}}" class="choice signing-switch" bindtap="cancelCloudPdfPreview">取消云预览</button>
     </view>
     <view class="preview-frame">
       <view wx:if="{{sheetStyle}}" class="preview-sheet" style="{{sheetStyle}}">
-        <image wx:if="{{preview}}" class="preview-image" src="{{preview}}" style="{{previewStyle}}" mode="aspectFit" />
+        <image wx:if="{{preview}}" class="preview-image" src="{{preview}}" style="{{previewStyle}}"
+          mode="{{existingPdfName ? 'scaleToFill' : 'aspectFit'}}" data-path="{{preview}}" binderror="failPreviewImage" />
+        <view wx:elif="{{existingPdfName}}" class="page-guide">签名位置示意</view>
         <view wx:if="{{signatureStyle}}" class="signature-overlay" style="{{signatureStyle}}" aria-label="拖动调整签名位置"
           catchtouchstart="startSignatureDrag" catchtouchmove="moveSignatureDrag" catchtouchend="endSignatureDrag" catchtouchcancel="endSignatureDrag">
+          <image wx:if="{{signatureImage}}" class="signature-image" src="{{signatureImage}}" mode="scaleToFill" />
           <view wx:for="{{signatureSegments}}" wx:key="id" class="signature-segment" style="{{item.style}}" />
         </view>
       </view>
@@ -26,19 +32,28 @@
       <view class="preview-count">{{selected + 1}} / {{pageCount}}</view>
     </view>
     <view class="export-field">
-      <view class="field-label">手写签名</view>
+      <view class="field-label">签名</view>
       <view class="choice-row">
-        <button class="choice" bindtap="openInk" disabled="{{!!busy || !sheetStyle}}">{{signatureStyle ? '重签此页' : '签署此页'}}</button>
-        <button wx:if="{{signatureStyle}}" class="choice" bindtap="removeSignature" disabled="{{!!busy}}">移除此页签名</button>
+        <button class="choice" bindtap="openInk" disabled="{{!!busy || !sheetStyle}}">手写签名</button>
+        <button class="choice" bindtap="chooseSignatureImage" disabled="{{!!busy || !sheetStyle}}">导入签名图片</button>
       </view>
       <view wx:if="{{signatureStyle}}" class="signature-hint">在页面预览中拖动签名调整位置。</view>
-      <button wx:if="{{signatureStyle && pageCount > 1}}" class="choice signature-all" bindtap="reuseSignature" disabled="{{!!busy}}">应用到未签页</button>
+      <view wx:if="{{signatureStyle}}" class="choice-row">
+        <button class="choice" bindtap="removeSignature" disabled="{{!!busy}}">移除此页签名</button>
+        <button wx:if="{{pageCount > 1}}" class="choice" bindtap="reuseSignature" disabled="{{!!busy}}">应用到未签页</button>
+      </view>
     </view>
-    <view class="export-field" wx:if="{{!existingPdfName && pageCount > 1}}">
+    <view class="export-field" wx:if="{{pageCount > 1}}">
       <view class="field-label">页面范围</view>
       <view class="choice-row">
         <button class="choice {{scope === 'all' ? 'choice-active' : ''}}" data-scope="all" bindtap="selectScope" disabled="{{!!busy}}">全部 {{pageCount}} 页</button>
         <button class="choice {{scope === 'current' ? 'choice-active' : ''}}" data-scope="current" bindtap="selectScope" disabled="{{!!busy}}">第 {{selected + 1}} 页</button>
+        <button class="choice {{scope === 'range' ? 'choice-active' : ''}}" data-scope="range" bindtap="selectScope" disabled="{{!!busy}}">页码范围</button>
+      </view>
+      <view wx:if="{{scope === 'range'}}" class="range-row">
+        <input class="range-input" type="number" aria-label="起始页" value="{{rangeStart}}" bindinput="setRangeStart" disabled="{{!!busy}}" />
+        <text>至</text>
+        <input class="range-input" type="number" aria-label="结束页" value="{{rangeEnd}}" bindinput="setRangeEnd" disabled="{{!!busy}}" />
       </view>
     </view>
     <view class="export-field">
@@ -54,12 +69,18 @@
     </view>
     <button class="primary" bindtap="savePdf" disabled="{{!!busy}}">{{busy || (existingPdfName ? '生成签名 PDF' : '生成 PDF')}}</button>
     <view class="export-note">生成后可在微信文档菜单保存或转发。</view>
-    <button wx:if="{{!existingPdfName}}" class="choice signing-switch" bindtap="chooseExistingPdf" disabled="{{!!busy}}">签署已有 PDF</button>
+    <view class="choice-row signing-switch">
+      <button class="choice" bindtap="chooseExistingPdf" disabled="{{!!busy}}">{{existingPdfName ? '更换 PDF' : '签署已有 PDF'}}</button>
+      <button class="choice" bindtap="chooseDocumentImages" disabled="{{!!busy}}">{{importedImages ? '更换文档图片' : '导入文档图片'}}</button>
+    </view>
+    <button wx:if="{{hasScans && (existingPdfName || importedImages)}}" class="choice signing-switch" bindtap="restoreScanDraft" disabled="{{!!busy}}">返回扫描件</button>
   </view>
   <view class="export-card" wx:else>
-    <view class="field-label">签署已有 PDF</view>
-    <view class="signature-hint">选择 10 MB 以内、最多 50 页的 PDF。</view>
-    <button class="primary" bindtap="chooseExistingPdf" disabled="{{!!busy}}">{{busy || '从聊天选择 PDF'}}</button>
+    <view class="field-label">选择签名文件</view>
+    <view class="signature-hint">PDF 限 10 MB、50 页，图片可从相册多选。</view>
+    <button class="primary" bindtap="chooseExistingPdf" disabled="{{!!busy}}">从聊天选择 PDF</button>
+    <button class="choice signing-switch" bindtap="chooseDocumentImages" disabled="{{!!busy}}">从相册导入文档图片</button>
+    <view wx:if="{{busy}}" class="signature-hint" aria-role="status">{{busy}}</view>
   </view>
   <view wx:if="{{inkOpen}}" class="ink-mask" catchtouchmove="moveInk">
     <view class="ink-dialog" aria-role="dialog">

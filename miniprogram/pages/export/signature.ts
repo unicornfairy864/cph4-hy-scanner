@@ -70,7 +70,7 @@ export function pointInPad(pad: InkPad, x: number, y: number): SignaturePoint {
 export function signatureOverlay(signature: PageSignature, pageWidth: number, pageHeight: number) {
   const rect = signatureRectangle(signature, pageWidth, pageHeight)
   const thickness = rect.thickness
-  const styles = signature.ink.strokes.flatMap((stroke) => stroke.map((point, index) => {
+  const styles = ('ink' in signature ? signature.ink.strokes : []).flatMap((stroke) => stroke.map((point, index) => {
     const x = point.x * rect.width
     const y = point.y * rect.height
     const next = stroke[index + 1]
@@ -83,5 +83,6 @@ export function signatureOverlay(signature: PageSignature, pageWidth: number, pa
   return {
     style: `left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px`,
     segments: styles.map((style, id) => ({ id, style })),
+    imagePath: 'image' in signature ? signature.image.imagePath : '',
   }
 }

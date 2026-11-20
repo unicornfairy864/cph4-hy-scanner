@@ -61,6 +61,21 @@ HTTPS 反向代理将小程序后台登记的域名转发到该监听地址。�
 
 图像增强操作 `clarify` 提升轻度模糊页面的局部清晰度，`exam_restore` 尝试淡化红蓝手写痕迹。两项在 VPS 直接处理像素，输出可先预览。相同颜色的印刷或图形也可能改变。遮挡后看不到的原字和黑色手写难以可靠恢复。
 
+## 导入 PDF 的页内预览
+
+在 Debian 或 Ubuntu 的 VPS 上安装 Poppler 命令行工具。现有 Python 虚拟环境可以继续使用。
+
+```sh
+sudo apt-get update
+sudo apt-get install -y --no-install-recommends poppler-utils
+command -v pdfinfo
+command -v pdftoppm
+```
+
+用户选择「生成本页预览」并确认后，小程序上传整份原 PDF 至自己的 VPS。VPS 只渲染选择的页，采用 PDF 的可见裁剪框和旋转方向，最长边 1600 像素，返回 PNG。支持 8 MiB 以内、1 至 50 页的 PDF。签名和签名后的 PDF 保存在手机上。
+
+此功能使用原有微信会话认证、单并发任务队列与 25 秒超时。源 PDF 在任务结束后删除，预览终态文件最多保留 10 分钟，客户端取回结果或取消后会尝试立即删除。缺少 Poppler 时返回 `pdf_preview_unavailable`。用户仍可通过微信查看原 PDF，并在本机签署。
+
 ## 接口
 
 除登录和健康检查外，所有请求携带 `Authorization: Bearer <accessToken>`。
@@ -68,12 +83,12 @@ HTTPS 反向代理将小程序后台登记的域名转发到该监听地址。�
 | 方法与路径 | 输入和结果 |
 | --- | --- |
 | `POST /v1/auth/wechat` | 提交 JSON `{"code":"..."}`，返回 `{accessToken, expiresIn}` |
-| `POST /v1/jobs` | 提交 multipart `file`、`operation`（`dewarp`、`deshadow`、`ocr`、`receipt`、`identity`、`exam`、`clarify`、`exam_restore`）、`clientRequestId`，返回 202 和 `{jobId, status}` |
+| `POST /v1/jobs` | 提交 multipart `file`、`operation`（`dewarp`、`deshadow`、`ocr`、`receipt`、`identity`、`exam`、`clarify`、`exam_restore`、`pdf_page_preview`）、`clientRequestId`，返回 202 和 `{jobId, status}` |
 | `GET /v1/jobs/{jobId}` | 返回 `{jobId, status}`，失败时另有 `error: {code, message}` |
-| `GET /v1/jobs/{jobId}/result` | 图像增强返回 JPEG，OCR 和智能识别返回 JSON。成功前返回 409 |
+| `GET /v1/jobs/{jobId}/result` | 图像增强返回 JPEG，OCR 和智能识别返回 JSON，PDF 单页预览返回 PNG。成功前返回 409 |
 | `DELETE /v1/jobs/{jobId}` | 立即撤销或删除，成功时返回 204 |
 
-上传方向已归正的单页 JPEG。图像增强使用保留原色的图片，OCR 可使用原色或灰度图片。上限 8 MiB、600 万像素、最长边 8192，短边至少 64。格式无效返回 422，超过限额返回 413。状态为 `queued`、`running`、`succeeded`、`failed`。同一账号以相同请求 ID 和相同操作重传同一张图，服务返回已有任务。请求 ID 允许 1 至 128 位字母、数字、下划线或连字符。任务已过期或不属于当前用户时返回 404。队列忙时返回 429。
+普通图像任务上传方向已归正的单页 JPEG。PDF 预览只接收原 PDF，并在 multipart 中另传从 1 开始的 `pageNumber`。图像增强使用保留原色的图片，OCR 可使用原色或灰度图片。JPEG 上限 8 MiB、600 万像素、最长边 8192，短边至少 64。格式无效返回 422，超过限额返回 413。状态为 `queued`、`running`、`succeeded`、`failed`。同一账号以相同请求 ID 和相同操作重传同一张图，服务返回已有任务。请求 ID 允许 1 至 128 位字母、数字、下划线或连字符。任务已过期或不属于当前用户时返回 404。队列忙时返回 429。
 
 队列最多接受 8 个活动任务，同一账号最多 2 个。待处理任务最多排队 120 秒，单个计算任务最多运行 25 秒。源图在处理完成后删除，结果及任务记录保留 10 分钟。手动删除会取消正在进行的处理。客户端应保留原图和本地处理版。
 

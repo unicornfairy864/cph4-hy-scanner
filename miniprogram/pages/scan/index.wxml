@@ -11,8 +11,9 @@
     <view class="support">拍照或导入图片，校正页面并合成 PDF。</view>
     <view class="button-row welcome-actions">
       <button class="primary" bindtap="takePhoto" disabled="{{!!busy}}">拍照扫描</button>
-      <button class="secondary" bindtap="showImportOptions" disabled="{{!!busy}}">导入图片</button>
+      <button class="secondary" bindtap="showImportOptions" disabled="{{!!busy}}">图片</button>
     </view>
+    <view class="welcome-divider" aria-hidden="true" />
     <view class="button-row welcome-tools">
       <button class="secondary" bindtap="openArchive" disabled="{{!!busy}}">错题归档</button>
       <button class="secondary" bindtap="openPdfSigning" disabled="{{!!busy}}">签署已有 PDF</button>
@@ -23,10 +24,8 @@
     <view class="fixed-preview">
       <view class="preview-toolbar">
         <view class="preview-count">{{selected + 1}} / {{pageCount}}</view>
-        <view class="segment" aria-label="图像预览">
-          <button class="{{showOriginal ? 'segment-active' : ''}}" data-view="original" bindtap="selectPreview" disabled="{{!!busy || hasMosaic}}">原图</button>
-          <button class="{{!showOriginal ? 'segment-active' : ''}}" data-view="effect" bindtap="selectPreview" disabled="{{!!busy}}">效果</button>
-        </view>
+        <button class="preview-toggle" bindtap="togglePreview" disabled="{{!!busy || hasMosaic}}"
+          aria-label="{{hasMosaic ? '当前效果，已应用马赛克' : (showOriginal ? '当前原图，切换到效果' : '当前效果，切换到原图')}}"><text class="preview-choice {{showOriginal ? 'preview-choice-active' : ''}}">原图</text><text class="preview-choice {{!showOriginal ? 'preview-choice-active' : ''}}">效果</text></button>
         <view class="preview-actions">
           <text class="save-label">保存为：</text>
           <button class="save-button" bindtap="saveJpg" disabled="{{!!busy || dragId >= 0 || swapFrom >= 0}}" aria-label="保存图片为 JPG">图片</button>
@@ -93,7 +92,7 @@
         </view>
 
         <view class="panel" wx:if="{{candidate}}">
-          <view class="heading">服务器处理结果</view>
+          <view class="heading cloud-label"><image class="cloud-icon" src="/assets/cloud.svg" mode="aspectFit" aria-hidden="true" />云端处理结果</view>
           <view class="candidate-frame"><image src="{{candidate}}" mode="aspectFit" /></view>
           <view class="button-row">
             <button class="secondary" bindtap="dismissCandidate">舍弃</button>
@@ -105,15 +104,15 @@
           <view class="heading">页面工具</view>
           <view class="button-row options">
             <button class="secondary" bindtap="openDecorations" disabled="{{!!busy || dragId >= 0 || swapFrom >= 0}}">马赛克与水印</button>
-            <button class="secondary" bindtap="openSmartTools" disabled="{{!!busy || dragId >= 0 || swapFrom >= 0}}">智能工具</button>
+            <button class="secondary cloud-action" bindtap="openSmartTools" disabled="{{!!busy || dragId >= 0 || swapFrom >= 0}}"><image class="cloud-icon" src="/assets/cloud.svg" mode="aspectFit" aria-hidden="true" />智能工具</button>
           </view>
           <button class="secondary full-width" bindtap="openArchive" disabled="{{!!busy || dragId >= 0 || swapFrom >= 0}}">错题归档</button>
         </view>
 
         <view class="panel">
-          <view class="heading">文字识别</view>
-          <view class="support ocr-description" wx:if="{{cloudEnabled}}">{{hasEnhanced ? '使用已采用的服务器增强图。' : '按当前裁切与方向准备识别图片。'}}</view>
-          <view class="support ocr-description" wx:else>尚未配置 VPS 文字识别服务。</view>
+          <view class="heading cloud-label"><image class="cloud-icon" src="/assets/cloud.svg" mode="aspectFit" aria-hidden="true" />文字识别</view>
+          <view class="support ocr-description" wx:if="{{cloudEnabled}}">{{hasEnhanced ? '使用已采用的云端增强图。' : '按当前裁切与方向准备识别图片。'}}</view>
+          <view class="support ocr-description" wx:else>尚未配置云端文字识别。</view>
           <button class="secondary full-width" bindtap="startOcr" disabled="{{!cloudEnabled || !!busy || dragId >= 0 || swapFrom >= 0}}">识别第 {{selected + 1}} 页</button>
           <view class="support ocr-description" wx:if="{{ocrMessage}}" aria-role="status">{{ocrMessage}}</view>
           <view class="ocr-result" wx:if="{{ocrText}}">
@@ -124,7 +123,7 @@
 
         <view class="panel">
           <view class="heading">文档增强</view>
-          <view wx:if="{{hasEnhanced}}" class="support active-cloud">已采用服务器增强。更改设置会重新处理原图。</view>
+          <view wx:if="{{hasEnhanced}}" class="support active-cloud">已采用云端增强。更改设置会重新处理原图。</view>
           <view class="button-row options" aria-label="图像色彩">
             <button wx:for="{{modes}}" wx:key="value" class="option {{mode === item.value ? 'option-active' : ''}}"
               data-mode="{{item.value}}" bindtap="selectMode" disabled="{{!!busy}}">{{item.label}}</button>
@@ -140,9 +139,9 @@
           <view wx:if="{{dewarp}}" class="support">适合文字行清晰的弯曲书页。</view>
           <button wx:if="{{pageCount > 1}}" class="secondary full-width" bindtap="applyEnhancementToAll" disabled="{{!!busy}}">将增强设置应用到全部页</button>
           <view wx:if="{{cloudEnabled}}" class="cloud-options">
-            <view class="support">服务器增强仅处理当前页。</view>
+            <view class="support cloud-label"><image class="cloud-icon" src="/assets/cloud.svg" mode="aspectFit" aria-hidden="true" />云端增强仅处理当前页。</view>
             <view class="button-row">
-              <button class="secondary" data-operation="dewarp" bindtap="startCloud" disabled="{{!!busy}}">服务器展平</button>
+              <button class="secondary" data-operation="dewarp" bindtap="startCloud" disabled="{{!!busy}}">云端展平</button>
               <button class="secondary" data-operation="deshadow" bindtap="startCloud" disabled="{{!!busy}}">深阴影处理</button>
             </view>
           </view>

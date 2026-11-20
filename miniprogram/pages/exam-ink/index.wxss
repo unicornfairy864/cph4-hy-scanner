@@ -25,6 +25,8 @@ button.primary { background: #185e53; color: #fff; }
 button.active { background: #d9eee3; box-shadow: inset 0 0 0 2rpx #28806d; color: #164739; }
 .compact { font-size: 24rpx; min-height: 48rpx; padding: 8rpx 13rpx; white-space: nowrap; }
 .bar button, .actions button { flex: 1; }
+button.cloud-control { align-items: center; display: flex; gap: 8rpx; justify-content: center; }
+.cloud-icon { flex: none; height: 32rpx; width: 32rpx; }
 .bar, .actions { margin-top: 12rpx; }
 .zoom-bar { margin-top: 12rpx; }
 .zoom-level { font-size: 25rpx; min-width: 52rpx; text-align: center; }

@@ -2,8 +2,10 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { decodePDFRawStream, degrees, PDFArray, PDFDocument, PDFName, PDFRawStream } from 'pdf-lib'
 import {
-  createScanPdf, inspectSigningPdf, maxSigningPdfBytes, normalizeSignature, signExistingPdf, signatureRectangle,
+  createScanPdf, inspectSigningPdf, maxSigningPdfBytes, normalizeSignature, signExistingPdf, signatureImageFormat, signatureRectangle,
 } from '../miniprogram/services/pdf'
+import type { PageSignature } from '../miniprogram/services/pdf'
+import { exportPageRange } from '../miniprogram/pages/export/session'
 
 const portrait = Buffer.from(
   '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAADAAIBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAAB//EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AUn//2Q==',
@@ -119,4 +121,53 @@ test('rejects unsupported PDF inputs before attempting to sign', async () => {
   encrypted.addPage()
   encrypted.context.trailerInfo.Encrypt = encrypted.context.register(encrypted.context.obj({ Filter: PDFName.of('Standard'), V: 1, R: 2 }))
   await assert.rejects(inspectSigningPdf(await encrypted.save()), /加密 PDF/)
+})
+
+test('converts an inclusive page range to original page indices and rejects invalid ranges', () => {
+  assert.deepEqual(exportPageRange('range', 4, 0, '2', '3'), { start: 1, end: 3 })
+  assert.deepEqual(exportPageRange('range', 4, 0, '4', '4'), { start: 3, end: 4 })
+  assert.deepEqual(exportPageRange('all', 4, 0, '', ''), { start: 0, end: 4 })
+  assert.deepEqual(exportPageRange('current', 4, 2, '', ''), { start: 2, end: 3 })
+  for (const [first, last] of [['', '4'], ['0', '4'], ['3', '2'], ['1', '5'], ['1.5', '3']]) {
+    assert.throws(() => exportPageRange('range', 4, 0, first, last), /有效起止页码/)
+  }
+})
+
+test('places a transparent image signature on the original selected page of an imported PDF range', async () => {
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAwAAAAGCAYAAAD37n+BAAAAKUlEQVR4nGNgwAJE5Gz+YxPHCmCKidKErgibJiairSZkOl5xQu5FlgcABPcM2GQo0dQAAAAASUVORK5CYII=',
+    'base64',
+  )
+  assert.equal(signatureImageFormat(png), 'png')
+  assert.equal(signatureImageFormat(portrait), 'jpg')
+  assert.equal(signatureImageFormat(new Uint8Array([12, 34])), undefined)
+  const source = await PDFDocument.create()
+  source.addPage([400, 650]).drawText('Excluded first page')
+  source.addPage([650, 500]).drawText('Kept page without signature')
+  const rotated = source.addPage([500, 700])
+  rotated.setCropBox(20, 40, 450, 600)
+  rotated.setRotation(degrees(90))
+  const original = await source.save()
+  const signature: PageSignature = {
+    center: { x: 0.75, y: 0.88 },
+    image: { imagePath: 'mock-signature.png', bytes: png, width: 12, height: 6, format: 'png' },
+  }
+  const signatures = new Map([[2, signature]])
+  await assert.rejects(signExistingPdf(original, signatures, { start: 0, end: 2 }), /所选范围内.*添加签名/)
+  const output = await PDFDocument.load(await signExistingPdf(original, signatures, { start: 1, end: 3 }))
+  assert.equal(output.getPageCount(), 2)
+  assert.deepEqual(output.getPage(0).getSize(), { width: 650, height: 500 })
+  assert.doesNotMatch(pageContent(output.getPage(0)), /\/Image-\d+ Do/)
+  const signed = output.getPage(1)
+  assert.deepEqual(signed.getCropBox(), { x: 20, y: 40, width: 450, height: 600 })
+  assert.equal(signed.getRotation().angle, 90)
+  assert.match(pageContent(signed), /\/Image-\d+ Do/)
+  const matrices = pageContent(signed).split('\n').filter((line) => line.endsWith(' cm'))
+  assert.ok(matrices.some((line) => {
+    const [a, b, c, d] = line.split(' ').map(Number)
+    return Math.abs(a) < 1e-10 && b === 1 && c === -1 && Math.abs(d) < 1e-10
+  }))
+  const resources = signed.node.Resources()
+  const imageObjects = resources?.lookup(PDFName.of('XObject'))
+  assert.ok(imageObjects?.toString().includes('/Image-'))
 })

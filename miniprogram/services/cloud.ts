@@ -66,11 +66,12 @@ export interface ExamInkPlan {
   protect: ExamInkStroke[];
 }
 
-type JobOperation = CloudOperation | SmartOperation | 'ocr' | 'exam_ink_candidates' | 'exam_ink_ai_candidates' | 'exam_ink_apply';
+type JobOperation = CloudOperation | SmartOperation | 'ocr' | 'exam_ink_candidates' | 'exam_ink_ai_candidates' | 'exam_ink_apply' | 'pdf_page_preview';
 
 interface JobPayload {
   operation: JobOperation;
   plan?: string;
+  pageNumber?: string;
 }
 
 interface CloudJob {
@@ -79,10 +80,13 @@ interface CloudJob {
   errorCode?: string;
 }
 
-interface CloudTaskOptions {
-  imagePath: string;
+interface CloudTaskCallbacks {
   onStatus?(status: CloudStatus): void;
   isCancelled?(): boolean;
+}
+
+interface CloudTaskOptions extends CloudTaskCallbacks {
+  imagePath: string;
 }
 
 interface EnhancementOptions extends CloudTaskOptions {
@@ -101,6 +105,11 @@ interface ExamInkApplyOptions extends CloudTaskOptions {
   plan: ExamInkPlan;
 }
 
+interface PdfPreviewOptions extends CloudTaskCallbacks {
+  filePath: string;
+  pageNumber: number;
+}
+
 interface Session {
   token: string;
   validUntil: number;
@@ -112,11 +121,17 @@ const httpsEndpoint = /^https:\/\/(?:[a-z0-9-]+\.)+[a-z0-9-]+(?::\d{1,5})?(?:\/[
 const apiBaseUrl = httpsEndpoint.test(configuredUrl) ? configuredUrl : '';
 export const cloudEnabled = apiBaseUrl !== '';
 export const smartEnabled = cloudEnabled;
+export const maxCloudPdfPreviewBytes = 8 * 1024 * 1024;
+export const maxCloudPdfPreviewPages = 50;
 
 const REQUEST_TIMEOUT = 8000;
 const UPLOAD_TIMEOUT = 25000;
 const TASK_TIMEOUT = 85000;
 const POLL_INTERVAL = 1000;
+const submissionFailureCodes = new Set([
+  'smart_unavailable', 'exam_ink_ai_unavailable', 'invalid_exam_ink_plan',
+  'pdf_preview_unavailable', 'invalid_pdf', 'pdf_page_out_of_range',
+]);
 
 let session: Session | undefined;
 let pendingLogin: Promise<Session> | undefined;
@@ -126,12 +141,12 @@ class NetworkError extends Error {}
 
 class HttpError extends Error {
   constructor(readonly status: number, code?: string) {
-    super(code === 'smart_unavailable' || code === 'exam_ink_ai_unavailable' || code === 'invalid_exam_ink_plan' ? failureMessage(code) : ({
+    super(code && submissionFailureCodes.has(code) ? failureMessage(code) : ({
       401: '微信登录失效，请重新尝试',
       404: '云端任务已过期，请重新提交',
       409: '云端任务状态已变化，请重新尝试',
-      413: '这张图片超过云端处理大小限制',
-      422: '云端无法读取这张图片',
+      413: '该文件超过云端处理大小限制',
+      422: '云端无法读取该文件',
       429: '云端正在处理其他页面，请稍后重试',
     } as Record<number, string>)[status] ?? '云端处理暂不可用，请稍后重试');
   }
@@ -242,11 +257,11 @@ function jobFromResponse(raw: unknown): CloudJob {
   return { jobId, status, errorCode: typeof errorCode === 'string' ? errorCode : undefined };
 }
 
-function upload(imagePath: string, payload: JobPayload, clientRequestId: string, token: string): Promise<CloudJob> {
+function upload(filePath: string, payload: JobPayload, clientRequestId: string, token: string): Promise<CloudJob> {
   return new Promise((resolve, reject) => {
     wx.uploadFile({
       url: apiBaseUrl + '/v1/jobs',
-      filePath: imagePath,
+      filePath,
       name: 'file',
       formData: { ...payload, clientRequestId },
       header: { Authorization: 'Bearer ' + token },
@@ -293,11 +308,14 @@ function failureMessage(code: string | undefined): string {
   return ({
     unsupported_page: '这页缺少可用于弯曲矫正的清晰文字行',
     ocr_unavailable: '云端文字识别暂不可用，请稍后重试',
-    smart_unavailable: 'VPS 尚未配置智能文档识别服务',
+    smart_unavailable: '云端尚未配置智能识别服务',
     smart_provider_error: '智能识别服务暂未返回可用结果，请稍后重试或缩小识别范围',
-    exam_ink_ai_unavailable: 'VPS 尚未配置 AI 去笔迹检测，可使用普通候选检测或手动画笔',
-    exam_ink_provider_error: 'AI 暂未返回可用候选，可使用普通候选检测或手动画笔',
+    exam_ink_ai_unavailable: 'DeepSeek 提示尚未配置，可用云端提示或手动画笔',
+    exam_ink_provider_error: 'DeepSeek 暂未返回结果，可用云端提示或手动画笔',
     invalid_exam_ink_plan: '去笔迹范围或画笔数据无效，请重新调整',
+    pdf_preview_unavailable: '云端 PDF 预览暂不可用，仍可生成签名文件',
+    invalid_pdf: '云端无法读取该 PDF',
+    pdf_page_out_of_range: '该页超出云端 PDF 预览范围',
     invalid_image: '云端无法读取这张图片',
     processing_timeout: '云端处理超时，请稍后重试',
     queue_timeout: '云端排队超时，请稍后重试',
@@ -395,6 +413,15 @@ async function runCloudJob<T>(
 
 export async function runCloudEnhancement(options: EnhancementOptions): Promise<{ imagePath: string }> {
   return { imagePath: await runCloudJob(options, { operation: options.operation }, download, removeTemporaryFile) };
+}
+
+export async function runCloudPdfPreview({ filePath, pageNumber, ...callbacks }: PdfPreviewOptions): Promise<{ imagePath: string }> {
+  if (!Number.isInteger(pageNumber) || pageNumber < 1 || pageNumber > maxCloudPdfPreviewPages) {
+    throw new Error(`云端 PDF 预览支持第 1 至 ${maxCloudPdfPreviewPages} 页`);
+  }
+  const payload: JobPayload = { operation: 'pdf_page_preview', pageNumber: String(pageNumber) };
+  const imagePath = await runCloudJob({ imagePath: filePath, ...callbacks }, payload, download, removeTemporaryFile);
+  return { imagePath };
 }
 
 export function runCloudOcr(options: CloudTaskOptions): Promise<OcrResult> {
@@ -515,7 +542,7 @@ function serializeExamInkPlan(plan: ExamInkPlan): string {
 }
 
 function requireExamInkCloud(): void {
-  if (!cloudEnabled) throw new Error('VPS 去笔迹服务尚未配置，可先使用小程序的马赛克遮盖笔迹');
+  if (!cloudEnabled) throw new Error('云端擦除尚未配置，可先用马赛克遮盖笔迹');
 }
 
 export async function runExamInkCandidates(options: ExamInkCandidatesOptions): Promise<ExamInkCandidatesResult> {

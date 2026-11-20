@@ -7,6 +7,8 @@ page {
 .smart-page { padding: 24rpx 24rpx 44rpx; padding-bottom: calc(44rpx + env(safe-area-inset-bottom)); }
 .panel { background: #fff; border: 1rpx solid #dfe7e1; border-radius: 26rpx; margin-bottom: 20rpx; padding: 26rpx; }
 .heading { color: #1a3128; font-size: 32rpx; font-weight: 650; }
+.cloud-heading { align-items: center; display: flex; gap: 8rpx; }
+.cloud-icon { flex: none; height: 34rpx; width: 34rpx; }
 .tab-row, .button-row, .compare-row { display: flex; gap: 12rpx; }
 .tab-row { margin-bottom: 18rpx; }
 .button-row { margin-top: 18rpx; }

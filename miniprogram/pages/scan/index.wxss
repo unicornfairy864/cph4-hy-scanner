@@ -55,7 +55,8 @@ button[disabled] { opacity: 0.5; }
 
 .welcome-title { font-size: 54rpx; font-weight: 720; letter-spacing: 2rpx; margin: 32rpx 0 8rpx; }
 .welcome-actions { margin-top: 44rpx; width: 100%; }
-.welcome-actions > button { min-height: 88rpx; }
+.welcome-actions > button { align-items: center; display: flex; height: 88rpx; justify-content: center; min-height: 88rpx; padding: 0 12rpx; }
+.welcome-divider { border-top: 1rpx solid #dfe7e1; margin-top: 18rpx; width: 100%; }
 .welcome-tools { margin-top: 14rpx; width: 100%; }
 
 .paper-mark {
@@ -97,18 +98,20 @@ button[disabled] { opacity: 0.5; }
 }
 
 .preview-count { color: #4c665b; font-size: 24rpx; white-space: nowrap; }
-.segment { background: #e2ebe3; border-radius: 56rpx; display: flex; padding: 5rpx; }
-.segment > button {
-  background: transparent;
-  border-radius: 48rpx;
+button.preview-toggle {
+  align-items: center;
+  background: #e2ebe3;
+  border-radius: 56rpx;
   color: #486253;
+  display: flex;
   font-size: 25rpx;
-  min-height: 52rpx;
-  padding: 10rpx 16rpx;
+  min-height: 62rpx;
+  padding: 5rpx;
   white-space: nowrap;
 }
 
-.segment > .segment-active { background: #fff; color: #174e44; box-shadow: 0 2rpx 6rpx #173e351f; }
+.preview-choice { border-radius: 48rpx; display: block; padding: 10rpx 14rpx; }
+.preview-choice-active { background: #fff; color: #174e44; box-shadow: 0 2rpx 6rpx #173e351f; }
 .preview-actions { align-items: center; display: flex; gap: 12rpx; }
 .save-label { color: #4c665b; font-size: 23rpx; white-space: nowrap; }
 button.save-button {
@@ -137,18 +140,19 @@ button.image-arrow {
   align-items: center;
   background: #152b25cc;
   border: 1rpx solid #f2fff34d;
-  border-radius: 50%;
+  border-radius: 16rpx;
   color: #fff;
   display: flex;
   font-size: 48rpx;
-  height: 76rpx;
+  height: 88rpx;
   justify-content: center;
-  min-height: 76rpx;
+  min-height: 44px;
+  min-width: 44px;
   padding: 0 0 4rpx;
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
-  width: 76rpx;
+  width: 88rpx;
   z-index: 2;
 }
 
@@ -226,6 +230,9 @@ button.organizer-button.secondary { background: #e2ebe3; }
 .options { margin: 16rpx 0; }
 .sharpen-options { margin: 0 0 12rpx; }
 .active-cloud { margin-top: 8rpx; }
+.cloud-label, button.cloud-action { align-items: center; display: flex; gap: 8rpx; }
+button.cloud-action { justify-content: center; }
+.cloud-icon { display: inline-block; flex: none; height: 34rpx; width: 34rpx; }
 .ocr-description { margin-top: 10rpx; }
 .ocr-result { margin-top: 18rpx; }
 .ocr-text { background: #eef4ef; border-radius: 16rpx; display: block; font-size: 28rpx; line-height: 1.55; padding: 18rpx; white-space: pre-wrap; word-break: break-word; }
