@@ -363,16 +363,19 @@ Page<EditorData, EditorActions>({
       return
     }
     if (status !== 'accepted' && status !== 'rejected' && status !== 'pending') return
-    const regions = this.data.regions.map((item) => item.id === id ? { ...item, status } : item)
+    const regions = this.data.regions.map((item): Region => item.id === id ? { ...item, status } : item)
     this.editState({ regions, strokes: this.data.strokes }, id)
   },
 
-  editState(state, selected = this.data.selected) {
+  editState(state, selected) {
     const history = this.history
     if (history.length === MAX_HISTORY) history.shift()
     history.push(stateOf(this.data))
     unlink(this.data.result)
-    this.setData({ ...state, ...summarize(state), selected, canUndo: true, result: '', view: 'original', showMarks: true, error: '' })
+    this.setData({
+      ...state, ...summarize(state), selected: selected ?? this.data.selected,
+      canUndo: true, result: '', view: 'original', showMarks: true, error: '',
+    })
   },
 
   undo() {
