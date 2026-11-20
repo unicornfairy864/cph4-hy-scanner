@@ -74,6 +74,7 @@ interface SmartActions {
   selectTool(event: WechatMiniprogram.TouchEvent): void
   selectCompare(event: WechatMiniprogram.TouchEvent): void
   requestProcessing(): void
+  openExamInk(): Promise<void>
   process(session: SmartSession, tool: typeof tools[number]): Promise<void>
   cancelProcessing(): void
   clearResult(): void
@@ -83,6 +84,7 @@ interface SmartActions {
   removeArchived(event: WechatMiniprogram.TouchEvent): void
   printArchive(): Promise<void>
   saveResult(): Promise<void>
+  transferImageToScan(imagePath: string): boolean
   adoptResult(): void
 }
 
@@ -215,6 +217,46 @@ Page<SmartData, SmartActions>({
       },
       complete: () => { this.confirming = false },
     })
+  },
+
+  async openExamInk() {
+    const session = this.session
+    const tool = tools[this.data.selectedTool]
+    if (!session || tool?.operation !== 'exam_restore' || !smartEnabled || this.data.busy || this.confirming || this.closed) return
+    this.setData({ busy: '正在准备黑笔编辑', message: '' })
+    let generated: string | undefined
+    try {
+      // Use one owned raster for both marking and the confirmed upload, including any active marks.
+      const page = { ...session.page, mode: 'color' as const, denoise: false }
+      const { imagePath } = await renderInput(page, 'export')
+      generated = imagePath
+      if (this.closed || this.session !== session) return
+      const canAdopt = !hasDecorations(page)
+      await new Promise<void>((resolve, reject) => {
+        wx.navigateTo({
+          url: '/pages/exam-ink/index',
+          success: ({ eventChannel }) => {
+            if (this.closed || this.session !== session) {
+              reject(new Error('当前扫描页已关闭。'))
+              return
+            }
+            eventChannel.on?.('examInkAdopt', (result: { imagePath: string }) => {
+              if (this.closed || this.session !== session || !canAdopt || typeof result?.imagePath !== 'string' || !result.imagePath) return
+              if (this.transferImageToScan(result.imagePath)) eventChannel.emit('examInkAdopted', { imagePath: result.imagePath })
+            })
+            eventChannel.emit('examInkStart', { imagePath, temporary: true, canAdopt, number: session.number })
+            resolve()
+          },
+          fail: reject,
+        })
+      })
+      generated = undefined
+    } catch (error) {
+      if (!this.closed) this.setData({ message: describe(error, '无法打开黑笔编辑，请重试。') })
+    } finally {
+      unlink(generated)
+      if (!this.closed) this.setData({ busy: '' })
+    }
   },
 
   async process(session, tool) {
@@ -402,16 +444,20 @@ Page<SmartData, SmartActions>({
     }
   },
 
-  adoptResult() {
-    const imagePath = this.resultPath
-    if (!imagePath || this.data.protectedPage || this.data.busy) return
+  transferImageToScan(imagePath) {
     const channel = this.getOpenerEventChannel?.()
     let adopted = false
     const accept = (result: { imagePath: string }) => { adopted = result.imagePath === imagePath }
     channel?.on?.('smartAdopted', accept)
     channel?.emit?.('smartAdopt', { imagePath })
     channel?.off?.('smartAdopted', accept)
-    if (!adopted) {
+    return adopted
+  },
+
+  adoptResult() {
+    const imagePath = this.resultPath
+    if (!imagePath || this.data.protectedPage || this.data.busy) return
+    if (!this.transferImageToScan(imagePath)) {
       wx.showToast({ title: '无法应用到原扫描页。可另存图片。', icon: 'none' })
       return
     }

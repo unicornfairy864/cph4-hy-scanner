@@ -32,11 +32,13 @@
       <view class="note">{{tools[selectedTool].detail}}</view>
       <view wx:if="{{!enabled}}" class="notice">尚未配置处理 VPS，仍可使用本机错题归档。</view>
       <button wx:if="{{!running}}" class="primary process-button" bindtap="requestProcessing" disabled="{{!enabled || !!busy}}">
-        {{image || document ? '重新处理当前页' : '处理当前页'}}
+        {{tools[selectedTool].operation === 'exam_restore' ? '擦除红蓝笔迹' : (image || document ? '重新处理当前页' : '处理当前页')}}
       </button>
-      <view wx:if="{{running}}" class="progress" aria-role="status">
+      <button wx:if="{{tools[selectedTool].operation === 'exam_restore' && !running}}" class="secondary process-button"
+        bindtap="openExamInk" disabled="{{!enabled || !!busy}}">标记擦除黑笔</button>
+      <view wx:if="{{busy}}" class="progress" aria-role="status">
         <text>{{busy}}</text>
-        <button class="secondary compact" bindtap="cancelProcessing">取消</button>
+        <button wx:if="{{running}}" class="secondary compact" bindtap="cancelProcessing">取消</button>
       </view>
       <view wx:if="{{message}}" class="notice" aria-role="status">{{message}}</view>
     </view>

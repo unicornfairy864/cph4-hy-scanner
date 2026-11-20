@@ -936,7 +936,14 @@ Page<ScannerData, ScannerActions>({
     const revision = page.revision
     const rotation = page.rotation
     const number = this.selectedPage + 1
-    const snapshot: ExportPage = { ...renderOptions(page), corners: copyCorners(page.corners), enhanced: page.enhanced, preview: hasCurrentPreview(page) ? page.preview : undefined }
+    const decorations = page.decorations && {
+      mosaics: page.decorations.mosaics?.map((region) => ({ ...region })),
+      watermarks: page.decorations.watermarks?.map((watermark) => ({ ...watermark })),
+    }
+    const snapshot: ExportPage = {
+      ...renderOptions(page), corners: copyCorners(page.corners), decorations, enhanced: page.enhanced,
+      preview: hasCurrentPreview(page) && page.preview ? { ...page.preview } : undefined,
+    }
     this.setData({ busy: '正在打开智能工具', deleteArmed: -1 })
     wx.navigateTo({
       url: '/pages/smart/index',
