@@ -14,10 +14,7 @@
       <button class="secondary" bindtap="showImportOptions" disabled="{{!!busy}}">图片</button>
     </view>
     <view class="welcome-divider" aria-hidden="true" />
-    <view class="button-row welcome-tools">
-      <button class="secondary" bindtap="openArchive" disabled="{{!!busy}}">错题归档</button>
-      <button class="secondary" bindtap="openPdfSigning" disabled="{{!!busy}}">签署已有 PDF</button>
-    </view>
+    <button class="secondary welcome-signing" bindtap="openPdfSigning" disabled="{{!!busy}}">签署已有 PDF</button>
   </view>
 
   <view class="workspace {{cropOpen || !pageCount ? 'workspace-hidden' : ''}}">
@@ -106,7 +103,6 @@
             <button class="secondary" bindtap="openDecorations" disabled="{{!!busy || dragId >= 0 || swapFrom >= 0}}">马赛克与水印</button>
             <button class="secondary cloud-action" bindtap="openSmartTools" disabled="{{!!busy || dragId >= 0 || swapFrom >= 0}}"><image class="cloud-icon" src="/assets/cloud.svg" mode="aspectFit" aria-hidden="true" />智能工具</button>
           </view>
-          <button class="secondary full-width" bindtap="openArchive" disabled="{{!!busy || dragId >= 0 || swapFrom >= 0}}">错题归档</button>
         </view>
 
         <view class="panel">

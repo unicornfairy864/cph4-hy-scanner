@@ -231,7 +231,6 @@ interface ScannerActions {
   selectSharpen(event: WechatMiniprogram.TouchEvent): void
   openDecorations(): Promise<void>
   openSmartTools(): void
-  openArchive(): void
   openPdfSigning(): void
   applyEnhancementToAll(): void
   togglePreview(): void
@@ -958,15 +957,6 @@ Page<ScannerData, ScannerActions>({
         eventChannel.emit('smartPage', { page: snapshot, number })
       },
       fail: () => notify('无法打开智能工具，请重试。'),
-      complete: () => { if (!this.closed) this.setData({ busy: '' }) },
-    })
-  },
-
-  openArchive() {
-    if (this.data.busy || this.pageDrag || this.buttonSwap) return
-    this.setData({ busy: '正在打开错题归档' })
-    wx.navigateTo({
-      url: '/pages/smart/index?archive=1', fail: () => notify('无法打开错题归档，请重试。'),
       complete: () => { if (!this.closed) this.setData({ busy: '' }) },
     })
   },
