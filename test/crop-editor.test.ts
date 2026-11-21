@@ -33,10 +33,13 @@ test('a slanted edge translates both endpoints along its normal in display pixel
   assert.deepEqual(result.slice(2), skewed.slice(2))
 })
 
-test('edge motion stops at the image boundary or before the crop becomes invalid', () => {
+test('edge motion stays inside the image and stops before the crop becomes invalid', () => {
   const outside = moveEdge(skewed, 0, { x: 0, y: -2000 }, 240, 440)
   closeTo(outside[0].y, 0)
-  closeTo(outside[1].y - outside[0].y, skewed[1].y - skewed[0].y)
+  const slope = (skewed[1].y - skewed[0].y) / (skewed[1].x - skewed[0].x)
+  closeTo(outside[1].y - outside[0].y, (outside[1].x - outside[0].x) * slope)
+  assert.ok(isValidCrop(outside))
+  assert.ok(outside.every(({ x, y }) => x >= 0 && x <= 1 && y >= 0 && y <= 1))
 
   const pastOpposite = moveEdge(fullImageCorners, 0, { x: 0, y: 2000 }, 240, 440)
   assert.ok(isValidCrop(pastOpposite))
@@ -47,6 +50,37 @@ test('edge motion stops at the image boundary or before the crop becomes invalid
   closeTo(wrapped[3].x, 0.2)
   closeTo(wrapped[0].x, 0.2)
   assert.deepEqual(wrapped.slice(1, 3), fullImageCorners.slice(1, 3))
+})
+
+test('a tilted crop edge can slide along the image frame in either direction', () => {
+  const corners: Quad = [
+    { x: 0, y: 0.18 },
+    { x: 1, y: 0.19 },
+    { x: 1, y: 0.84 },
+    { x: 0.06, y: 0.89 },
+  ]
+  const width = 240
+  const height = 440
+  const down = moveEdge(corners, 0, { x: 0, y: 90 }, width, height)
+  const up = moveEdge(corners, 0, { x: 0, y: -40 }, width, height)
+  assert.equal(down[0].x, 0)
+  assert.equal(up[1].x, 1)
+  assert.ok(down[0].y > 0.38)
+  assert.ok(up[1].y < 0.10)
+
+  // The same drag after clockwise rotation follows the same source corners.
+  const rotated = orientCorners(moveEdge(orientCorners(corners, 90), 0,
+    { x: -90, y: 0 }, height, width), 270)
+  for (let index = 0; index < 4; index += 1) {
+    closeTo(rotated[index].x, down[index].x)
+    closeTo(rotated[index].y, down[index].y)
+  }
+
+  for (const result of [down, up]) {
+    assert.ok(isValidCrop(result))
+    closeTo(result[1].y - result[0].y, (result[1].x - result[0].x) * (corners[1].y - corners[0].y))
+    assert.deepEqual(result.slice(2), corners.slice(2))
+  }
 })
 
 test('corners stay within the image without crossing the other crop corners', () => {

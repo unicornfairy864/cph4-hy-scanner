@@ -1,6 +1,6 @@
 import { flattenBookPage } from './dewarp';
 import { mosaicFrame, sharpenFrame } from './finish';
-import type { Frame, Point, Quad, RenderOptions } from './types';
+import type { Frame, Point, Quad, RenderOptions, Rotation } from './types';
 
 function luminance(red: number, green: number, blue: number): number {
   return (77 * red + 150 * green + 29 * blue) >> 8;
@@ -102,6 +102,27 @@ function warp(source: Frame, { corners, rotation, maxDimension }: RenderOptions)
     }
   }
   return { width, height, data };
+}
+
+function rotateFrame(frame: Frame, rotation: Rotation): Frame {
+  if (rotation === 0) return frame;
+  const quarterTurn = rotation !== 180;
+  const width = quarterTurn ? frame.height : frame.width;
+  const height = quarterTurn ? frame.width : frame.height;
+  const source = new Uint32Array(frame.data.buffer, frame.data.byteOffset, frame.width * frame.height);
+  const pixels = new Uint32Array(width * height);
+  const firstPixel = rotation === 90 ? (frame.height - 1) * frame.width
+    : rotation === 180 ? source.length - 1 : frame.width - 1;
+  const rowStep = rotation === 90 ? 1 : rotation === 180 ? -frame.width : -1;
+  const columnStep = rotation === 90 ? -frame.width : rotation === 180 ? -1 : frame.width;
+  for (let y = 0; y < height; y++) {
+    let sourceIndex = firstPixel + y * rowStep;
+    for (let x = 0; x < width; x++) {
+      pixels[y * width + x] = source[sourceIndex];
+      sourceIndex += columnStep;
+    }
+  }
+  return { width, height, data: new Uint8ClampedArray(pixels.buffer) };
 }
 
 function removeIsolatedPixels(frame: Frame): void {
@@ -219,8 +240,9 @@ function enhance(frame: Frame, { mode, enhance: correctLight }: RenderOptions): 
 }
 
 export function renderDocument(source: Frame, options: RenderOptions): Frame {
-  const cropped = warp(source, options);
-  const result = options.dewarp ? flattenBookPage(cropped) : cropped;
+  const result = options.dewarp
+    ? rotateFrame(flattenBookPage(warp(source, { ...options, rotation: 0 })), options.rotation)
+    : warp(source, options);
   if (options.denoise) removeIsolatedPixels(result);
   sharpenFrame(result, options.sharpen);
   enhance(result, options);

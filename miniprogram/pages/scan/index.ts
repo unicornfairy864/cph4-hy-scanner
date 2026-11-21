@@ -8,6 +8,7 @@ import type { DecorateSession, DecorationEdits } from '../decorate/session'
 import { edgeStyles, fitImage, fitRotatedImageStyle, fullImageCorners, isValidCrop, orientCorners } from './geometry'
 
 const MAX_PAGES = 30
+const CLOUD_IMAGE_EDGE = 2048
 const TILE_CARD_WIDTH = 158
 const TILE_CARD_HEIGHT = 228
 const TILE_STRIDE = TILE_CARD_WIDTH + 15
@@ -55,6 +56,7 @@ interface ScanPage {
   renderingRevision?: number
   preview?: PreviewImage
   enhanced?: string
+  cloudDewarp?: { imagePath: string; rotation: Rotation }
   ocr?: OcrFeedback
 }
 
@@ -182,6 +184,7 @@ interface ScannerActions {
   suppressTapUntil: number
   closed: boolean
   cloudTurn: number
+  cloudDewarpCandidate?: string
   ocrTurn: number
   ocrBorrowedInputs: Map<number, string>
   takePhoto(): void
@@ -223,6 +226,7 @@ interface ScannerActions {
   applyCrop(event: { detail: { corners: Quad; rotation: Rotation } }): void
   rotate(): void
   rotatePage(page: ScanPage, rotation: Rotation): void
+  rotateCloudDewarp(page: ScanPage, rotation: Rotation): Promise<void>
   restoreCrop(): void
   selectMode(event: WechatMiniprogram.TouchEvent): void
   toggleEnhance(event: WechatMiniprogram.SwitchChange): void
@@ -609,6 +613,7 @@ Page<ScannerData, ScannerActions>({
         used.add(page.source)
         if (page.preview) used.add(page.preview.imagePath)
         if (page.enhanced) used.add(page.enhanced)
+        if (page.cloudDewarp) used.add(page.cloudDewarp.imagePath)
         for (const watermark of page.decorations?.watermarks ?? []) {
           if (watermark.kind === 'image') used.add(watermark.imagePath)
         }
@@ -658,7 +663,10 @@ Page<ScannerData, ScannerActions>({
 
   invalidate(page, keepEnhanced = false) {
     page.revision += 1
-    if (!keepEnhanced) page.enhanced = undefined
+    if (!keepEnhanced) {
+      page.enhanced = undefined
+      page.cloudDewarp = undefined
+    }
     const protectedPage = hasMosaic(page)
     const previewLayers = protectedPage ? [] : this.data.showOriginal
       ? this.data.previewLayers
@@ -749,6 +757,10 @@ Page<ScannerData, ScannerActions>({
       showMosaicReview()
       return
     }
+    if (page.cloudDewarp) {
+      void this.rotateCloudDewarp(page, rotation)
+      return
+    }
     const angle = ((rotation - page.rotation + 360) % 360) as Rotation
     page.rotation = rotation
     if (page.decorations && hasDecorations(page)) {
@@ -763,6 +775,40 @@ Page<ScannerData, ScannerActions>({
     this.syncSelection()
     this.paint()
     void this.refreshPreview()
+  },
+
+  async rotateCloudDewarp(page, rotation) {
+    const base = page.cloudDewarp
+    if (!base || this.data.busy || rotation === page.rotation) return
+    const revision = page.revision
+    const turned = ((rotation - base.rotation + 360) % 360) as Rotation
+    const current = () => !this.closed && this.current() === page && page.revision === revision && page.cloudDewarp === base
+    this.setData({ busy: '正在旋转展平图像' })
+    try {
+      // Always rotate from the adopted raster so repeated turns do not accumulate JPEG loss.
+      const result = turned === 0 ? base : await decorateImage({
+        imagePath: base.imagePath, rotation: turned, quality: 'export', maxDimension: CLOUD_IMAGE_EDGE, jpegQuality: 0.95,
+      })
+      if (!current()) {
+        if (result.imagePath !== base.imagePath) removeFile(result.imagePath)
+        return
+      }
+      const angle = ((rotation - page.rotation + 360) % 360) as Rotation
+      this.generatedImages.add(result.imagePath)
+      page.enhanced = result.imagePath
+      page.rotation = rotation
+      if (page.decorations) page.decorations = rotateDecorations(page.decorations, angle)
+      this.syncGallery()
+      this.invalidate(page, true)
+      this.paint()
+    } catch (error) {
+      if (current()) {
+        this.paint()
+        notify(errorText(error, '无法旋转展平图像，请重试。'))
+      }
+    } finally {
+      if (!this.closed) this.setData({ busy: '' })
+    }
   },
 
   restoreCrop() {
@@ -849,7 +895,10 @@ Page<ScannerData, ScannerActions>({
       page.dewarp = dewarp
       page.sharpen = current.sharpen
       page.revision += 1
-      if (baseChanged) page.enhanced = undefined
+      if (baseChanged) {
+        page.enhanced = undefined
+        page.cloudDewarp = undefined
+      }
       if (page.ocr && page.ocr.inputKey !== ocrInputKey(page)) page.ocr = undefined
     }
     this.syncGallery()
@@ -949,6 +998,7 @@ Page<ScannerData, ScannerActions>({
           if (this.closed || this.current() !== page || page.revision !== revision || page.rotation !== rotation || hasDecorations(page)) return
           this.generatedImages.add(imagePath)
           page.enhanced = imagePath
+          page.cloudDewarp = undefined
           page.sharpen = 'off'
           this.invalidate(page, true)
           this.paint()
@@ -1417,7 +1467,7 @@ Page<ScannerData, ScannerActions>({
     try {
       const result = await renderPage({
         ...renderOptions(page), mode: 'color', enhance: false, denoise: false, dewarp: false, sharpen: 'off', decorations: undefined,
-        quality: 'export', maxDimension: 2048, jpegQuality: 0.9,
+        quality: 'export', maxDimension: CLOUD_IMAGE_EDGE, jpegQuality: 0.9,
       })
       input = result.imagePath
       if (cancelled()) return
@@ -1436,6 +1486,7 @@ Page<ScannerData, ScannerActions>({
       if (cancelled()) removeFile(output.imagePath)
       else {
         this.generatedImages.add(output.imagePath)
+        this.cloudDewarpCandidate = operation === 'dewarp' ? output.imagePath : undefined
         this.setData({ candidate: output.imagePath })
       }
     } catch (error) {
@@ -1457,12 +1508,16 @@ Page<ScannerData, ScannerActions>({
     const page = this.current()
     if (!page || !this.data.candidate || this.data.busy || hasMosaic(page)) return
     page.enhanced = this.data.candidate
+    page.cloudDewarp = this.cloudDewarpCandidate === page.enhanced
+      ? { imagePath: page.enhanced, rotation: page.rotation } : undefined
+    this.cloudDewarpCandidate = undefined
     this.setData({ showOriginal: false })
     this.invalidate(page, true)
     this.paint()
   },
 
   dismissCandidate() {
+    this.cloudDewarpCandidate = undefined
     this.setData({ candidate: '' }, () => this.releaseUnusedImages())
   },
 
