@@ -86,6 +86,8 @@ const platform = wx as unknown as {
 
 const MAX_WORKING_EDGE = 2400;
 const MAX_ORIENTATION_EDGE = 4096;
+const DETECTION_DECODE_TIMEOUT = 3000;
+const DETECTION_TIMEOUT = 10000;
 let pending: Promise<unknown> = Promise.resolve();
 let imageWorker: ImageWorker | undefined;
 let workerDisabled = false;
@@ -109,21 +111,36 @@ function canvas2d() {
   return { canvas, context };
 }
 
-function loadImage(canvas: Canvas, imagePath: string): Promise<CanvasImage> {
+function loadImage(canvas: Canvas, imagePath: string, timeoutMs?: number): Promise<CanvasImage> {
   return new Promise((resolve, reject) => {
     const image = canvas.createImage();
-    image.onload = () => {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const cleanup = () => {
+      if (timeout !== undefined) clearTimeout(timeout);
       image.onload = null;
       image.onerror = null;
+    };
+    image.onload = () => {
+      cleanup();
       if (image.width < 2 || image.height < 2) reject(new Error('图片尺寸太小'));
       else resolve(image);
     };
     image.onerror = () => {
-      image.onload = null;
-      image.onerror = null;
+      cleanup();
       reject(new Error('无法读取这张图片'));
     };
-    image.src = imagePath;
+    if (timeoutMs !== undefined) {
+      timeout = setTimeout(() => {
+        cleanup();
+        reject(new Error('读取图片超时'));
+      }, timeoutMs);
+    }
+    try {
+      image.src = imagePath;
+    } catch (error) {
+      cleanup();
+      reject(error);
+    }
   });
 }
 
@@ -208,9 +225,9 @@ export function prepareImage({ imagePath }: Source): Promise<ImageFile> {
   });
 }
 
-async function readFrame(imagePath: string, edge: number): Promise<Frame> {
+async function readFrame(imagePath: string, edge: number, decodeTimeout?: number): Promise<Frame> {
   const { canvas, context } = canvas2d();
-  const image = await loadImage(canvas, imagePath);
+  const image = await loadImage(canvas, imagePath, decodeTimeout);
   const { width, height } = sizeAtMost(image.width, image.height, edge);
   canvas.width = width;
   canvas.height = height;
@@ -266,8 +283,19 @@ function useLocalFallback(): void {
 }
 
 export function detectQuad({ imagePath }: Source): Promise<Detection> {
-  return serialize(async () => {
-    const frame = await readFrame(imagePath, 480);
+  const timeoutError = new Error('识别页边超时');
+  let expired = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      expired = true;
+      reject(timeoutError);
+    }, DETECTION_TIMEOUT);
+  });
+  const result = serialize(async () => {
+    if (expired) throw timeoutError;
+    const frame = await readFrame(imagePath, 480, DETECTION_DECODE_TIMEOUT);
+    if (expired) throw timeoutError;
     if (!workerDisabled) {
       try {
         const reply = await sendToWorker(frame, { type: 'detect' });
@@ -278,7 +306,11 @@ export function detectQuad({ imagePath }: Source): Promise<Detection> {
         useLocalFallback();
       }
     }
+    if (expired) throw timeoutError;
     return detectDocument(frame);
+  });
+  return Promise.race([result, deadline]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
   });
 }
 

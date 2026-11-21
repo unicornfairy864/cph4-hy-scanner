@@ -275,6 +275,180 @@ function searchEdges(
   return best;
 }
 
+const MIN_REGION_SCORE = 0.68;
+
+function regionBoundaryScore(corners: Quad, frame: Frame): number {
+  const { width, height, data } = frame;
+  let total = 0;
+  let weakest = 1;
+  for (let side = 0; side < 4; side++) {
+    const start = corners[side];
+    const end = corners[(side + 1) % 4];
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const length = Math.hypot(dx, dy);
+    if (length < Math.min(width, height) * 0.12) return 0;
+    const normalX = -dy / length;
+    const normalY = dx / length;
+    const offset = Math.max(3, Math.min(6, length * 0.035));
+    let strength = 0;
+    let supported = 0;
+    const samples = 24;
+    for (let sample = 1; sample <= samples; sample++) {
+      const x = start.x + dx * sample / (samples + 1);
+      const y = start.y + dy * sample / (samples + 1);
+      const insideX = Math.round(x + offset * normalX);
+      const insideY = Math.round(y + offset * normalY);
+      const outsideX = Math.round(x - offset * normalX);
+      const outsideY = Math.round(y - offset * normalY);
+      if (insideX < 0 || insideX >= width || insideY < 0 || insideY >= height
+        || outsideX < 0 || outsideX >= width || outsideY < 0 || outsideY >= height) continue;
+      const inside = 4 * (insideY * width + insideX);
+      const outside = 4 * (outsideY * width + outsideX);
+      const contrast = (Math.abs(data[inside] - data[outside])
+        + Math.abs(data[inside + 1] - data[outside + 1])
+        + Math.abs(data[inside + 2] - data[outside + 2])) / 3;
+      if (contrast >= 12) supported++;
+      strength += Math.min(1, contrast / 32);
+    }
+    if (supported / samples < 0.58) return 0;
+    const support = strength / samples;
+    weakest = Math.min(weakest, support);
+    total += support / 4;
+  }
+  return 0.7 * total + 0.3 * weakest;
+}
+
+function searchRegions(
+  frame: Frame,
+  edges: Uint16Array,
+  threshold: number,
+): { corners: Quad | null; score: number } {
+  const { width, height, data } = frame;
+  const gray = new Uint8Array(width * height);
+  const chroma = new Uint8Array(gray.length);
+  const histogram = new Uint32Array(256);
+  for (let index = 0; index < gray.length; index++) {
+    const pixel = index * 4;
+    const red = data[pixel];
+    const green = data[pixel + 1];
+    const blue = data[pixel + 2];
+    const lightness = luminance(red, green, blue);
+    gray[index] = lightness;
+    chroma[index] = Math.max(red, green, blue) - Math.min(red, green, blue);
+    histogram[lightness]++;
+  }
+
+  const percentiles = [0.15, 0.30, 0.45, 0.60, 0.75, 0.90];
+  const cuts: number[] = [];
+  let cumulative = 0;
+  let percentile = 0;
+  for (let value = 0; value < histogram.length && percentile < percentiles.length; value++) {
+    cumulative += histogram[value];
+    if (cumulative < gray.length * percentiles[percentile]) continue;
+    if (cuts.length === 0 || value - cuts[cuts.length - 1] >= 8) cuts.push(value);
+    while (percentile < percentiles.length && cumulative >= gray.length * percentiles[percentile]) percentile++;
+  }
+  const masks = [
+    ...cuts.flatMap((value) => [
+      { channel: gray, value, light: true },
+      { channel: gray, value, light: false },
+    ]),
+    ...[18, 30].map((value) => ({ channel: chroma, value, light: true })),
+  ];
+  const connected = new Uint8Array(gray.length);
+  const mask = new Uint8Array(gray.length);
+  const queue = new Int32Array(gray.length);
+  const rowLeft = new Int32Array(height);
+  const rowRight = new Int32Array(height);
+  const neighbors = [-1, 1, -width, width];
+  const minArea = gray.length * 0.025;
+  const minSpan = Math.min(width, height) * 0.15;
+  let best: { corners: Quad | null; score: number } = { corners: null, score: 0 };
+  let bestMask: (typeof masks)[number] | undefined;
+
+  const initialMasks = masks.length;
+  for (let candidate = 0; candidate < masks.length; candidate++) {
+    const regionMask = masks[candidate];
+    const { channel, value, light } = regionMask;
+    for (let index = 0; index < mask.length; index++) {
+      mask[index] = Number(light ? channel[index] > value : channel[index] < value);
+    }
+    // Remove single-pixel bridges between the target and neighboring clutter.
+    for (let y = 1; y < height - 1; y++) {
+      for (let x = 1; x < width - 1; x++) {
+        const index = y * width + x;
+        connected[index] = mask[index] & mask[index - 1] & mask[index + 1]
+          & mask[index - width] & mask[index + width];
+      }
+    }
+    for (let start = 0; start < connected.length; start++) {
+      if (!connected[start]) continue;
+      let tail = 1;
+      let minY = height;
+      let maxY = 0;
+      let minX = width;
+      let maxX = 0;
+      queue[0] = start;
+      connected[start] = 0;
+      for (let head = 0; head < tail; head++) {
+        const pixel = queue[head];
+        const x = pixel % width;
+        const y = (pixel - x) / width;
+        minY = Math.min(minY, y);
+        maxY = Math.max(maxY, y);
+        minX = Math.min(minX, x);
+        maxX = Math.max(maxX, x);
+        for (const offset of neighbors) {
+          const adjacent = pixel + offset;
+          if (!connected[adjacent]) continue;
+          connected[adjacent] = 0;
+          queue[tail++] = adjacent;
+        }
+      }
+      if (tail < minArea * 0.65 || maxX - minX < minSpan || maxY - minY < minSpan) continue;
+      rowLeft.fill(width, minY, maxY + 1);
+      rowRight.fill(-1, minY, maxY + 1);
+      for (let index = 0; index < tail; index++) {
+        const pixel = queue[index];
+        const x = pixel % width;
+        const y = (pixel - x) / width;
+        rowLeft[y] = Math.min(rowLeft[y], x);
+        rowRight[y] = Math.max(rowRight[y], x);
+      }
+      const outline: Point[] = [];
+      for (let y = minY; y <= maxY; y++) {
+        if (rowRight[y] >= 0) outline.push({ x: rowLeft[y], y }, { x: rowRight[y], y });
+      }
+      const corners = quadrilateral(outline);
+      if (!corners) continue;
+      const area = (cross(corners[0], corners[1], corners[2]) + cross(corners[0], corners[2], corners[3])) / 2;
+      const fill = Math.min(1, tail / area);
+      if (area < minArea || area > 0.94 * gray.length || fill < 0.65) continue;
+      const refined = refineCorners(corners, edges, width, height, Math.min(32, threshold));
+      const refinedBoundary = regionBoundaryScore(refined, frame);
+      const regionBoundary = regionBoundaryScore(corners, frame);
+      const useRefined = refinedBoundary >= regionBoundary - 0.015;
+      const boundary = useRefined ? refinedBoundary : regionBoundary;
+      const score = 0.78 * boundary + 0.15 * fill + 0.07 * Math.min(1, area / (0.30 * gray.length));
+      if (boundary > 0 && score > best.score) {
+        best = { corners: useRefined ? refined : corners, score };
+        bestMask = regionMask;
+      }
+    }
+    if (candidate === initialMasks - 1 && bestMask?.channel === gray && best.score >= MIN_REGION_SCORE) {
+      // A slightly stricter cutoff can separate a plausible page from similarly lit clutter.
+      const { light, value } = bestMask;
+      const stricter = value + (light ? 7 : -7);
+      if (stricter > 0 && stricter < 255
+        && !masks.some((mask) => mask.channel === gray && mask.value === stricter && mask.light === light)) {
+        masks.push({ channel: gray, value: stricter, light });
+      }
+    }
+  }
+  return best;
+}
+
 interface SideLine {
   offset: number;
   slope: number;
@@ -483,6 +657,8 @@ export function detectDocument(frame: Frame): Detection {
     const lower = searchEdges(edges, width, height, Math.round(threshold * 0.62));
     if (lower.score > best.score) best = lower;
   }
+  const region = searchRegions(frame, edges, threshold);
+  if (region.score >= MIN_REGION_SCORE && region.score > best.score) best = region;
   if (best.corners && best.score >= 0.65) {
     return detection(best.corners, width, height, best.score, [best.score, best.score, best.score, best.score]);
   }

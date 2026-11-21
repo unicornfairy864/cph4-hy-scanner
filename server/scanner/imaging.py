@@ -66,7 +66,7 @@ def _text_signal(gray: np.ndarray, center: int, half_width: int) -> np.ndarray:
     return ink / norm if norm else ink
 
 
-def _page_curve(gray: np.ndarray) -> np.ndarray:
+def _page_curve(gray: np.ndarray) -> tuple[np.ndarray, float, bool]:
     height, width = gray.shape
     if min(width, height) < 160:
         raise UnsuitablePage
@@ -76,10 +76,13 @@ def _page_curve(gray: np.ndarray) -> np.ndarray:
     max_step = max(3, min(20, round(height * 0.025)))
     offsets: dict[int, float] = {}
     current_run: dict[int, float] = {}
+    run_score = 0.0
+    best_score = 0.0
     shifts = np.arange(-max_step, max_step + 1)
     for index, profile in enumerate(signals):
         if not np.any(profile):
             current_run = {}
+            run_score = 0.0
             continue
         if not current_run:
             current_run = {index: 0.0}
@@ -90,10 +93,13 @@ def _page_curve(gray: np.ndarray) -> np.ndarray:
             best = int(np.argmax(scores))
             if scores[best] < 0.28 or abs(shifts[best]) == max_step:
                 current_run = {index: 0.0}
+                run_score = 0.0
             else:
                 current_run[index] = current_run[index - 1] + float(shifts[best])
-        if len(current_run) > len(offsets):
+                run_score += float(scores[best])
+        if len(current_run) > len(offsets) or (len(current_run) == len(offsets) and run_score > best_score):
             offsets = current_run.copy()
+            best_score = run_score
 
     if len(offsets) < 7:
         raise UnsuitablePage
@@ -115,16 +121,42 @@ def _page_curve(gray: np.ndarray) -> np.ndarray:
     curve -= polynomial(0.5)
     if np.max(np.abs(curve)) > height * 0.14:
         raise UnsuitablePage
-    return curve
+    left, right = x[accepted].min(), x[accepted].max()
+    bend = abs(polynomial((left + right) / 2) - (polynomial(left) + polynomial(right)) / 2)
+    return curve, best_score / (len(centers) - 1) * float(np.mean(accepted)), bool(bend >= 2.5)
 
 
 def flatten_page(image: Image.Image) -> Image.Image:
     gray = _analysis_image(image, 900)
-    curve = _page_curve(gray)
-    width, height = image.size
-    offset = np.interp(np.linspace(0, 1, width), np.linspace(0, 1, len(curve)), curve)
-    offset = (offset * height / gray.shape[0]).astype(np.float32)
+    selected = None
+    selected_score = 0.0
+    selected_bend = False
+    sideways = False
+    for candidate, transpose in ((gray, False), (gray.T, True)):
+        try:
+            curve, score, has_bend = _page_curve(candidate)
+        except UnsuitablePage:
+            continue
+        # Columns of a regular layout can align as well as its actual text lines.
+        # Favor a measured curve when the two directions have comparable support.
+        if (selected is None or score > selected_score * 1.25
+                or (has_bend and not selected_bend and score >= selected_score * 0.8)):
+            selected = curve
+            selected_score = score
+            selected_bend = has_bend
+            sideways = transpose
+    if selected is None:
+        raise UnsuitablePage
+
     source = np.asarray(image)
+    if sideways:
+        gray = gray.T
+        source = source.swapaxes(0, 1)
+        if cv2 is not None:
+            source = np.ascontiguousarray(source)
+    height, width = source.shape[:2]
+    offset = np.interp(np.linspace(0, 1, width), np.linspace(0, 1, len(selected)), selected)
+    offset = (offset * height / gray.shape[0]).astype(np.float32)
     result = np.empty_like(source)
     x = np.arange(width, dtype=np.float32)
     border = max(height * 0.045, float(np.max(np.abs(offset))) + 1)
@@ -144,7 +176,7 @@ def flatten_page(image: Image.Image) -> Image.Image:
                 source, source_x, source_y, interpolation=cv2.INTER_LINEAR,
                 borderMode=cv2.BORDER_REPLICATE,
             )
-    return Image.fromarray(result)
+    return Image.fromarray(result.swapaxes(0, 1) if sideways else result)
 
 
 def process_image(source: Path, output: Path, operation: str, pixel_limit: int) -> None:

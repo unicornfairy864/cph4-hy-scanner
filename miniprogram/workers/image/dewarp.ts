@@ -16,15 +16,19 @@ function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(maximum, Math.max(minimum, value));
 }
 
-function textProfiles(frame: Frame, width: number, height: number): Float32Array[] {
+function textProfiles(frame: Frame, width: number, height: number, sideways: boolean): Float32Array[] {
   const gray = new Uint8Array(width * height);
   const dark = new Float32Array(gray.length);
   const { data } = frame;
+  const sourceWidth = sideways ? frame.height : frame.width;
+  const sourceHeight = sideways ? frame.width : frame.height;
+  const rowStride = sideways ? 1 : frame.width;
+  const columnStride = sideways ? frame.width : 1;
   for (let y = 0; y < height; y++) {
-    const sourceY = Math.min(frame.height - 1, Math.floor((y + 0.5) * frame.height / height));
+    const sourceY = Math.min(sourceHeight - 1, Math.floor((y + 0.5) * sourceHeight / height));
     for (let x = 0; x < width; x++) {
-      const sourceX = Math.min(frame.width - 1, Math.floor((x + 0.5) * frame.width / width));
-      const index = (sourceY * frame.width + sourceX) * 4;
+      const sourceX = Math.min(sourceWidth - 1, Math.floor((x + 0.5) * sourceWidth / width));
+      const index = (sourceY * rowStride + sourceX * columnStride) * 4;
       gray[y * width + x] = (77 * data[index] + 150 * data[index + 1] + 29 * data[index + 2]) >> 8;
     }
   }
@@ -170,10 +174,12 @@ function textBand(
     if (quality < 0.55 || (best && shifts.length <= best.offsets.length)) continue;
     best = { center, first, offsets: shifts.slice(), quality };
   }
-  if (!best) return null;
+  return best ?? null;
+}
 
-  const last = best.offsets.length - 1;
-  const offsets = best.offsets.map((value, index, values) => (
+function curvedBand(band: TextBand): TextBand | null {
+  const last = band.offsets.length - 1;
+  const offsets = band.offsets.map((value, index, values) => (
     index === 0 || index === last ? value : 0.2 * values[index - 1] + 0.6 * value + 0.2 * values[index + 1]
   ));
   const slope = (offsets[last] - offsets[0]) / last;
@@ -183,10 +189,8 @@ function textBand(
   }
   // A uniformly tilted or flat page has no curve to correct.
   if (bend < 2.6) return null;
-  best.offsets = offsets;
-  const middle = offsetAt(best, 0.5);
-  best.offsets = offsets.map((offset) => offset - middle);
-  return best;
+  const middle = offsetAt({ ...band, offsets }, 0.5);
+  return { ...band, offsets: offsets.map((offset) => offset - middle) };
 }
 
 function agreeingBands(bands: TextBand[], step: number): TextBand[] {
@@ -204,8 +208,12 @@ function agreeingBands(bands: TextBand[], step: number): TextBand[] {
   }));
 }
 
-function applyBands(frame: Frame, bands: TextBand[], analysisHeight: number, radius: number): Frame {
-  const { width, height, data } = frame;
+function applyBands(frame: Frame, bands: TextBand[], analysisHeight: number, radius: number, sideways: boolean): Frame {
+  const { data } = frame;
+  const width = sideways ? frame.height : frame.width;
+  const height = sideways ? frame.width : frame.height;
+  const rowStride = sideways ? 1 : frame.width;
+  const columnStride = sideways ? frame.width : 1;
   const result = new Uint8ClampedArray(data.length);
   const scale = height / analysisHeight;
   const maxOffset = analysisHeight * 0.10;
@@ -242,34 +250,53 @@ function applyBands(frame: Frame, bands: TextBand[], analysisHeight: number, rad
       const top = Math.floor(sourceY);
       const bottom = Math.min(height - 1, top + 1);
       const blend = sourceY - top;
-      const output = (y * width + x) * 4;
-      const topPixel = (top * width + x) * 4;
-      const bottomPixel = (bottom * width + x) * 4;
+      const column = x * columnStride;
+      const output = (y * rowStride + column) * 4;
+      const topPixel = (top * rowStride + column) * 4;
+      const bottomPixel = (bottom * rowStride + column) * 4;
       for (let channel = 0; channel < 4; channel++) {
         result[output + channel] = data[topPixel + channel] * (1 - blend) + data[bottomPixel + channel] * blend;
       }
     }
   }
-  return { width, height, data: result };
+  return { width: frame.width, height: frame.height, data: result };
 }
 
-export function flattenBookPage(frame: Frame): Frame {
-  const { width, height } = frame;
-  if (width < 180 || height < 240) return frame;
-  const analysisHeight = Math.min(ANALYSIS_EDGE, height);
-  const analysisWidth = Math.min(ANALYSIS_EDGE, Math.round(width * analysisHeight / height));
-  if (analysisWidth < 150) return frame;
+function analyzeText(frame: Frame, sideways: boolean) {
+  const width = sideways ? frame.height : frame.width;
+  const height = sideways ? frame.width : frame.height;
+  if (width < 180 || height < 240) return null;
+  const scale = Math.min(1, ANALYSIS_EDGE / Math.max(width, height));
+  const analysisHeight = Math.round(height * scale);
+  const analysisWidth = Math.round(width * scale);
+  if (analysisWidth < 150) return null;
 
-  const profiles = textProfiles(frame, analysisWidth, analysisHeight);
+  const profiles = textProfiles(frame, analysisWidth, analysisHeight, sideways);
   const radius = Math.round(analysisHeight * 0.074);
   const step = Math.max(10, Math.round(analysisHeight * 0.047));
   const shiftLimit = Math.max(5, Math.round(analysisHeight * 0.02));
   const candidates: TextBand[] = [];
+  let support = 0;
+  let windows = 0;
   for (let center = radius + 3; center < analysisHeight - radius / 2; center += step) {
     const band = textBand(profiles, center, radius, shiftLimit);
-    if (band) candidates.push(band);
+    windows++;
+    if (!band) continue;
+    support += band.quality * (band.offsets.length - 1) / (STRIP_COUNT - 1);
+    const curved = curvedBand(band);
+    if (curved) candidates.push(curved);
   }
-  const bands = agreeingBands(candidates, step);
-  if (bands.length === 0) return frame;
-  return applyBands(frame, bands, analysisHeight, radius);
+  return { bands: agreeingBands(candidates, step), analysisHeight, radius, support: support / windows, sideways };
+}
+
+export function flattenBookPage(frame: Frame): Frame {
+  const horizontal = analyzeText(frame, false);
+  const vertical = analyzeText(frame, true);
+  const horizontalSupport = horizontal?.support ?? 0;
+  // Repeated columns can align as well as the actual text rows, especially on a rotated page.
+  const verticalBend = vertical && vertical.bands.length > 0 && !horizontal?.bands.length
+    && vertical.support >= horizontalSupport * 0.8;
+  const selected = vertical && (vertical.support > horizontalSupport * 1.25 || verticalBend) ? vertical : horizontal;
+  if (!selected?.bands.length) return frame;
+  return applyBands(frame, selected.bands, selected.analysisHeight, selected.radius, selected.sideways);
 }

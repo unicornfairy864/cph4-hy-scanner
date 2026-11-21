@@ -70,13 +70,17 @@ class AlgorithmTests(unittest.TestCase):
 
     def test_dewarp_improves_horizontal_alignment_of_text(self):
         input_page = curved_page()
-        result = flatten_page(input_page)
-
         def rows_with_ink(image: Image.Image) -> float:
             ink = np.asarray(image.convert("L"))[60:740, 85:520] < 120
             return float(ink.sum(axis=1).std())
 
-        self.assertGreater(rows_with_ink(result), rows_with_ink(input_page) * 1.25)
+        for angle in (0, 90, 180, 270):
+            with self.subTest(angle=angle):
+                source = input_page.rotate(angle, expand=True)
+                result = flatten_page(source)
+                self.assertEqual(result.size, source.size)
+                upright = result.rotate(-angle, expand=True)
+                self.assertGreater(rows_with_ink(upright), rows_with_ink(input_page) * 1.25)
 
 
 class ApiTests(unittest.IsolatedAsyncioTestCase):

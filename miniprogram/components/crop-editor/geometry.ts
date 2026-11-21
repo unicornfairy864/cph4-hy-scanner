@@ -33,35 +33,48 @@ export function moveCorner(corners: Quad, index: number, offset: Point): Quad {
   })
 }
 
-function limitAxis(coordinate: number, delta: number): number {
-  if (delta > 0) return (1 - coordinate) / delta
-  if (delta < 0) return -coordinate / delta
-  return 1
+function lineBounds(coordinate: number, direction: number): [number, number] {
+  if (direction === 0) return [-Infinity, Infinity]
+  const near = -coordinate / direction
+  const far = (1 - coordinate) / direction
+  return [Math.min(near, far), Math.max(near, far)]
 }
 
 export function moveEdge(corners: Quad, index: number, drag: Point, width: number, height: number): Quad {
+  if (width <= 0 || height <= 0) return corners
   const endIndex = (index + 1) % corners.length
   const start = corners[index]
   const end = corners[endIndex]
-  const edgeX = (end.x - start.x) * width
-  const edgeY = (end.y - start.y) * height
+  const directionX = end.x - start.x
+  const directionY = end.y - start.y
+  const edgeX = directionX * width
+  const edgeY = directionY * height
   const length = Math.hypot(edgeX, edgeY)
   if (length === 0) return corners
 
   const normalX = -edgeY / length
   const normalY = edgeX / length
-  const distance = drag.x * normalX + drag.y * normalY
+  const projectionX = normalX * width
+  const projectionY = normalY * height
+  const origin = start.x * projectionX + start.y * projectionY
+  const minDistance = Math.min(0, projectionX) + Math.min(0, projectionY) - origin
+  const maxDistance = Math.max(0, projectionX) + Math.max(0, projectionY) - origin
+  const distance = Math.max(minDistance, Math.min(maxDistance, drag.x * normalX + drag.y * normalY))
   const deltaX = distance * normalX / width
   const deltaY = distance * normalY / height
-  const bounds = Math.min(1,
-    limitAxis(start.x, deltaX), limitAxis(end.x, deltaX),
-    limitAxis(start.y, deltaY), limitAxis(end.y, deltaY),
-  )
   return furthestValidCrop(corners, (ratio) => {
-    const delta = { x: deltaX * bounds * ratio, y: deltaY * bounds * ratio }
+    const x = start.x + deltaX * ratio
+    const y = start.y + deltaY * ratio
+    // Clamp each endpoint along the translated line so touching the frame never changes the angle.
+    const [minX, maxX] = lineBounds(x, directionX)
+    const [minY, maxY] = lineBounds(y, directionY)
+    const min = Math.max(minX, minY)
+    const max = Math.min(maxX, maxY)
+    const startAlong = Math.max(min, Math.min(max, 0))
+    const endAlong = Math.max(min, Math.min(max, 1))
     const next: Quad = [...corners]
-    next[index] = pointInImage(start.x + delta.x, start.y + delta.y)
-    next[endIndex] = pointInImage(end.x + delta.x, end.y + delta.y)
+    next[index] = pointInImage(x + directionX * startAlong, y + directionY * startAlong)
+    next[endIndex] = pointInImage(x + directionX * endAlong, y + directionY * endAlong)
     return next
   })
 }

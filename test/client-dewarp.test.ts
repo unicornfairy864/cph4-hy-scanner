@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { flattenBookPage } from '../miniprogram/workers/image/dewarp';
 import { renderDocument } from '../miniprogram/workers/image/render';
-import type { Frame, Quad } from '../miniprogram/workers/image/types';
+import type { Frame, Quad, Rotation } from '../miniprogram/workers/image/types';
 
 const WIDTH = 460;
 const HEIGHT = 640;
@@ -54,6 +54,18 @@ function concentration(frame: Frame, first: number, last: number): number {
   return Math.sqrt(totals.reduce((sum, value) => sum + (value - mean) ** 2, 0) / totals.length);
 }
 
+function quarterTurn(frame: Frame): Frame {
+  const { width, height, data } = frame;
+  const rotated = new Uint8ClampedArray(data.length);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const index = (y * width + x) * 4;
+      rotated.set(data.subarray(index, index + 4), (x * height + height - 1 - y) * 4);
+    }
+  }
+  return { width: height, height: width, data: rotated };
+}
+
 test('straightens curved text in separate vertical regions and preserves an unsupported graph', () => {
   const input = page(true);
   const result = flattenBookPage(input);
@@ -82,4 +94,34 @@ test('uses the optional correction in the renderer without changing the default'
   assert.deepEqual(plain.data, input.data);
   const adjusted = renderDocument(input, { ...settings, dewarp: true });
   assert.deepEqual(adjusted.data, flattenBookPage(plain).data);
+});
+
+test('keeps the same corrected pixels at all output rotations after perspective cropping', () => {
+  const input = page(true);
+  const corners: Quad = [{ x: 0.02, y: 0.01 }, { x: 0.98, y: 0.03 },
+    { x: 0.99, y: 0.96 }, { x: 0.01, y: 0.99 }];
+  const settings = { corners, mode: 'color', denoise: false, maxDimension: HEIGHT } as const;
+  let expected = renderDocument(input, { ...settings, rotation: 0, dewarp: true });
+  assert.notDeepEqual(expected.data, renderDocument(input, { ...settings, rotation: 0 }).data);
+  for (const rotation of [90, 180, 270] as Rotation[]) {
+    expected = quarterTurn(expected);
+    assert.deepEqual(renderDocument(input, { ...settings, rotation, dewarp: true }), expected);
+  }
+});
+
+test('flattens a book photographed sideways or upside down and retains the requested final orientation', () => {
+  const input = page(true);
+  const settings = { corners: ALL, mode: 'color', denoise: false, maxDimension: HEIGHT } as const;
+  const clockwise = quarterTurn(input);
+  const upsideDown = quarterTurn(clockwise);
+  const counterclockwise = quarterTurn(upsideDown);
+  for (const [source, rotation] of [[clockwise, 270], [upsideDown, 180], [counterclockwise, 90]] as const) {
+    const corrected = renderDocument(source, { ...settings, rotation, dewarp: true });
+    assert.equal(corrected.width, input.width);
+    assert.equal(corrected.height, input.height);
+    assert.ok(concentration(corrected, 34, 247) > 1.2 * concentration(input, 34, 247));
+    assert.ok(concentration(corrected, 408, 624) > 1.2 * concentration(input, 408, 624));
+  }
+  const flatSideways = quarterTurn(page(false));
+  assert.equal(flattenBookPage(flatSideways), flatSideways);
 });

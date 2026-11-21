@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 class FakeCanvas {
+  static decodedPaths: string[] = [];
   width = 1;
   height = 1;
   written: Uint8ClampedArray | undefined;
@@ -14,6 +15,8 @@ class FakeCanvas {
       onload: null as (() => void) | null,
       onerror: null as (() => void) | null,
       set src(value: string) {
+        FakeCanvas.decodedPaths.push(value);
+        if (value === 'wxfile://no-decode-callback.jpg') return;
         assert.equal(value, 'wxfile://scan.jpg');
         queueMicrotask(() => this.onload?.());
       },
@@ -46,16 +49,21 @@ class FakeCanvas {
   }
 }
 
-test('keeps local rendering and JPG export available after Worker creation fails', async () => {
+test('keeps local rendering and JPG export available after Worker creation fails', async (t) => {
   let workerRequests = 0;
   const outputEdits: string[][] = [];
   const source = 'wxfile://scan.jpg';
+  let finishImageInfo: (() => void) | undefined;
   Object.defineProperty(globalThis, 'wx', {
     configurable: true,
     value: {
       getImageInfo: ({ src, success }: { src: string; success: (value: object) => void }) => {
-        assert.equal(src, source);
-        success({ width: 80, height: 60, orientation: 'up' });
+        const finish = () => success({ width: 80, height: 60, orientation: 'up' });
+        if (src === 'wxfile://queued.jpg') finishImageInfo = finish;
+        else {
+          assert.equal(src, source);
+          finish();
+        }
       },
       createOffscreenCanvas: () => new FakeCanvas(),
       createWorker: () => { workerRequests++; throw new Error('worker unavailable'); },
@@ -92,6 +100,28 @@ test('keeps local rendering and JPG export available after Worker creation fails
     assert.deepEqual(decorated, { imagePath: 'wxfile://result.jpg', width: 30, height: 40 });
     assert.deepEqual(outputEdits, [['pixels'], ['rotate', 'pixels', 'watermark']]);
     assert.equal(workerRequests, 1);
+
+    await t.test('detection times out when the image decoder never calls back', async (t) => {
+      t.mock.timers.enable({ apis: ['setTimeout'] });
+      const failed = detectQuad({ imagePath: 'wxfile://no-decode-callback.jpg' });
+      await Promise.resolve();
+      t.mock.timers.tick(3000);
+      await assert.rejects(failed, /读取图片超时/);
+      assert.equal((await detectQuad(image)).corners, null);
+    });
+
+    await t.test('detection times out while queued and skips stale work', async (t) => {
+      t.mock.timers.enable({ apis: ['setTimeout'] });
+      const held = prepareImage({ imagePath: 'wxfile://queued.jpg' });
+      const failed = detectQuad({ imagePath: 'wxfile://never-read.jpg' });
+      t.mock.timers.tick(10000);
+      await assert.rejects(failed, /识别页边超时/);
+      assert.ok(finishImageInfo);
+      finishImageInfo();
+      await held;
+      assert.equal((await detectQuad(image)).corners, null);
+      assert.ok(!FakeCanvas.decodedPaths.includes('wxfile://never-read.jpg'));
+    });
   } finally {
     Reflect.deleteProperty(globalThis, 'wx');
   }
